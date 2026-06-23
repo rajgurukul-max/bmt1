@@ -3,11 +3,38 @@ export const dynamic = 'force-dynamic';
 export async function GET() {
   const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
   const key = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
-  
-  return Response.json({ 
-    hasUrl: !!url, 
-    hasKey: !!key,
-    urlPreview: url ? url.substring(0, 20) : 'MISSING',
-    keyPreview: key ? key.substring(0, 10) : 'MISSING'
+
+  const res = await fetch(
+    `${url}/rest/v1/venues?is_active=eq.true&select=*`,
+    {
+      headers: {
+        apikey: key!,
+        Authorization: `Bearer ${key}`,
+        "Content-Type": "application/json",
+      },
+    }
+  );
+
+  const data = await res.json();
+  return Response.json(data);
+}
+
+export async function POST(req: Request) {
+  const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
+  const key = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+  const body = await req.json();
+
+  const res = await fetch(`${url}/rest/v1/venues`, {
+    method: "POST",
+    headers: {
+      apikey: key!,
+      Authorization: `Bearer ${key}`,
+      "Content-Type": "application/json",
+      Prefer: "return=representation",
+    },
+    body: JSON.stringify(body),
   });
+
+  const data = await res.json();
+  return Response.json(data);
 }
