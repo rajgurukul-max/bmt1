@@ -1,5 +1,6 @@
 "use client";
 import { LayoutGrid, CalendarDays, Receipt, Wallet } from "lucide-react";
+
 export type Tab = "dashboard" | "calendar" | "bookings" | "payouts";
 
 const NAV_ITEMS: { id: Tab; label: string; icon: typeof LayoutGrid }[] = [
@@ -9,7 +10,15 @@ const NAV_ITEMS: { id: Tab; label: string; icon: typeof LayoutGrid }[] = [
   { id: "payouts", label: "Payouts", icon: Wallet },
 ];
 
-export default function Sidebar({ activeTab, onChange, venues }: { activeTab: Tab; onChange: (tab: Tab) => void; venues: any[] }) {
+export default function Sidebar({
+  activeTab,
+  onChange,
+  venues = [],
+}: {
+  activeTab: Tab;
+  onChange: (tab: Tab) => void;
+  venues: any[];
+}) {
   return (
     <aside className="w-60 shrink-0 border-r border-[#1E3324] flex flex-col">
       <div className="px-6 py-6 border-b border-[#1E3324]">
