@@ -1,24 +1,21 @@
 export const dynamic = 'force-dynamic';
-import { NextResponse } from "next/server";
-import { getSupabase } from "@/lib/supabase";
 
 export async function GET() {
-  const supabase = getSupabase();
-  const { data, error } = await supabase
-    .from("venues")
-    .select("*")
-    .eq("is_active", true);
-  if (error) return NextResponse.json({ error: error.message }, { status: 500 });
-  return NextResponse.json(data ?? []);
+  const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
+  const key = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+  
+  if (!url || !key) {
+    return Response.json({ error: 'Missing env vars', url: !!url, key: !!key });
+  }
+
+  const res = await fetch(`${url}/rest/v1/venues?is_active=eq.true&select=*`, {
+    headers: {
+      apikey: key,
+      Authorization: `Bearer ${key}`,
+    },
+  });
+
+  const data = await res.json();
+  return Response.json(data);
 }
 
-export async function POST(req: Request) {
-  const supabase = getSupabase();
-  const body = await req.json();
-  const { data, error } = await supabase
-    .from("venues")
-    .insert([body])
-    .select();
-  if (error) return NextResponse.json({ error: error.message }, { status: 500 });
-  return NextResponse.json(data);
-}
