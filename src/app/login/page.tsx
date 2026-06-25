@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { getSupabaseAuth } from "@/lib/auth";
 
 export default function LoginPage() {
@@ -8,6 +8,25 @@ export default function LoginPage() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [sent, setSent] = useState(false);
+
+  // Handle magic link token in URL hash
+  useEffect(() => {
+    const hash = window.location.hash;
+    if (hash && hash.includes("access_token")) {
+      const params = new URLSearchParams(hash.substring(1));
+      const access_token = params.get("access_token");
+      const refresh_token = params.get("refresh_token");
+
+      if (access_token && refresh_token) {
+        const supabase = getSupabaseAuth();
+        supabase.auth
+          .setSession({ access_token, refresh_token })
+          .then(() => {
+            window.location.href = "/";
+          });
+      }
+    }
+  }, []);
 
   const sendMagicLink = async () => {
     if (!email) return;
@@ -17,7 +36,7 @@ export default function LoginPage() {
     const { error } = await supabase.auth.signInWithOtp({
       email,
       options: {
-        emailRedirectTo: "https://www.bookmyturfs.com/auth/callback",
+        emailRedirectTo: "https://www.bookmyturfs.com/login",
         shouldCreateUser: true,
       },
     });
@@ -82,7 +101,10 @@ export default function LoginPage() {
                 Link expires in 1 hour.
               </p>
               <button
-                onClick={() => { setSent(false); setEmail(""); }}
+                onClick={() => {
+                  setSent(false);
+                  setEmail("");
+                }}
                 className="text-[#9FB0A3] text-sm hover:text-[#F4F7ED]"
               >
                 ← Try different email
