@@ -5,47 +5,26 @@ import { getSupabaseAuth } from "@/lib/auth";
 
 export default function LoginPage() {
   const [email, setEmail] = useState("");
-  const [otp, setOtp] = useState("");
-  const [step, setStep] = useState<"email" | "otp">("email");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
-  const [message, setMessage] = useState("");
+  const [sent, setSent] = useState(false);
 
-  const sendOtp = async () => {
+  const sendMagicLink = async () => {
     if (!email) return;
     setLoading(true);
     setError("");
     const supabase = getSupabaseAuth();
-    const { error } = await supabase.auth.signInWithOtp({ 
+    const { error } = await supabase.auth.signInWithOtp({
       email,
       options: {
+        emailRedirectTo: "https://www.bookmyturfs.com/auth/callback",
         shouldCreateUser: true,
-      }
+      },
     });
     if (error) {
       setError(error.message);
     } else {
-      setMessage(`OTP sent to ${email} — check your inbox`);
-      setStep("otp");
-    }
-    setLoading(false);
-  };
-
-
-  const verifyOtp = async () => {
-    if (!otp) return;
-    setLoading(true);
-    setError("");
-    const supabase = getSupabaseAuth();
-    const { error } = await supabase.auth.verifyOtp({
-      email,
-      token: otp,
-      type: "email",
-    });
-    if (error) {
-      setError(error.message);
-    } else {
-      window.location.href = "/";
+      setSent(true);
     }
     setLoading(false);
   };
@@ -64,9 +43,8 @@ export default function LoginPage() {
             Sign in to manage your venues
           </p>
         </div>
-
         <div className="bg-[#16291C] border border-[#1E3324] rounded-xl p-6">
-          {step === "email" ? (
+          {!sent ? (
             <>
               <label className="block text-sm text-[#9FB0A3] mb-2">
                 Email address
@@ -78,48 +56,38 @@ export default function LoginPage() {
                 placeholder="owner@example.com"
                 className="w-full bg-[#0E1F14] border border-[#2C4A33] rounded-lg px-4 py-3 text-[#F4F7ED] text-sm placeholder-[#5C7066] focus:outline-none focus:border-[#8BC34A] mb-4"
               />
-              {error && <p className="text-[#E5484D] text-xs mb-3">{error}</p>}
-              {message && <p className="text-[#8BC34A] text-xs mb-3">{message}</p>}
+              {error && (
+                <p className="text-[#E5484D] text-xs mb-3">{error}</p>
+              )}
               <button
-                onClick={sendOtp}
+                onClick={sendMagicLink}
                 disabled={loading || !email}
                 className="w-full bg-[#8BC34A] text-[#0E1F14] font-medium py-3 rounded-lg hover:bg-[#9BCF5E] transition-colors disabled:opacity-50"
               >
-                {loading ? "Sending OTP..." : "Send OTP"}
+                {loading ? "Sending..." : "Send Login Link"}
               </button>
             </>
           ) : (
-            <>
+            <div className="text-center py-4">
+              <div className="text-4xl mb-4">📧</div>
+              <h2 className="text-[#F4F7ED] font-medium mb-2">
+                Check your email!
+              </h2>
               <p className="text-[#9FB0A3] text-sm mb-4">
-                Enter the 6-digit OTP sent to{" "}
+                We sent a login link to{" "}
                 <span className="text-[#8BC34A]">{email}</span>
               </p>
-              <label className="block text-sm text-[#9FB0A3] mb-2">
-                OTP Code
-              </label>
-              <input
-                type="text"
-                value={otp}
-                onChange={(e) => setOtp(e.target.value)}
-                placeholder="123456"
-                maxLength={6}
-                className="w-full bg-[#0E1F14] border border-[#2C4A33] rounded-lg px-4 py-3 text-[#F4F7ED] text-sm placeholder-[#5C7066] focus:outline-none focus:border-[#8BC34A] mb-4 font-mono tracking-widest text-center text-lg"
-              />
-              {error && <p className="text-[#E5484D] text-xs mb-3">{error}</p>}
+              <p className="text-[#5C7066] text-xs mb-4">
+                Click the link in your email to access your dashboard.
+                Link expires in 1 hour.
+              </p>
               <button
-                onClick={verifyOtp}
-                disabled={loading || otp.length < 6}
-                className="w-full bg-[#8BC34A] text-[#0E1F14] font-medium py-3 rounded-lg hover:bg-[#9BCF5E] transition-colors disabled:opacity-50 mb-3"
+                onClick={() => { setSent(false); setEmail(""); }}
+                className="text-[#9FB0A3] text-sm hover:text-[#F4F7ED]"
               >
-                {loading ? "Verifying..." : "Verify OTP"}
+                ← Try different email
               </button>
-              <button
-                onClick={() => { setStep("email"); setError(""); setOtp(""); }}
-                className="w-full text-[#9FB0A3] text-sm hover:text-[#F4F7ED] transition-colors"
-              >
-                ← Back to email
-              </button>
-            </>
+            </div>
           )}
         </div>
       </div>
