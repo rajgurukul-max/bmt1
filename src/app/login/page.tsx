@@ -16,15 +16,21 @@ export default function LoginPage() {
     setLoading(true);
     setError("");
     const supabase = getSupabaseAuth();
-    const { error } = await supabase.auth.signInWithOtp({ email });
+    const { error } = await supabase.auth.signInWithOtp({ 
+      email,
+      options: {
+        shouldCreateUser: true,
+      }
+    });
     if (error) {
       setError(error.message);
     } else {
-      setMessage(`OTP sent to ${email}`);
+      setMessage(`OTP sent to ${email} — check your inbox`);
       setStep("otp");
     }
     setLoading(false);
   };
+
 
   const verifyOtp = async () => {
     if (!otp) return;
