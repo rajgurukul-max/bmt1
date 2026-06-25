@@ -12,21 +12,30 @@ export default function LoginPage() {
   // Handle magic link token in URL hash
   useEffect(() => {
     const hash = window.location.hash;
+    const search = window.location.search;
+    
     if (hash && hash.includes("access_token")) {
       const params = new URLSearchParams(hash.substring(1));
       const access_token = params.get("access_token");
       const refresh_token = params.get("refresh_token");
-
       if (access_token && refresh_token) {
         const supabase = getSupabaseAuth();
-        supabase.auth
-          .setSession({ access_token, refresh_token })
-          .then(() => {
-            window.location.href = "/";
-          });
+        supabase.auth.setSession({ access_token, refresh_token })
+          .then(() => { window.location.href = "/"; });
+      }
+    }
+    
+    if (search && search.includes("code=")) {
+      const params = new URLSearchParams(search);
+      const code = params.get("code");
+      if (code) {
+        const supabase = getSupabaseAuth();
+        supabase.auth.exchangeCodeForSession(code)
+          .then(() => { window.location.href = "/"; });
       }
     }
   }, []);
+
 
   const sendMagicLink = async () => {
     if (!email) return;
