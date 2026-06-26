@@ -10,7 +10,13 @@ const TITLES: Record<Tab, string> = {
   payouts: "Payouts",
 };
 
-export default function Header({ tab }: { tab: Tab }) {
+export default function Header({
+  tab,
+  onAddVenue,
+}: {
+  tab: Tab;
+  onAddVenue: () => void;
+}) {
   const today = new Date();
 
   const handleLogout = async () => {
@@ -28,7 +34,10 @@ export default function Header({ tab }: { tab: Tab }) {
         </p>
       </div>
       <div className="flex items-center gap-3">
-        <button className="flex items-center gap-2 bg-[#8BC34A] text-[#0E1F14] text-sm font-medium px-4 py-2 rounded-md hover:bg-[#9BCF5E] transition-colors">
+        <button
+          onClick={onAddVenue}
+          className="flex items-center gap-2 bg-[#8BC34A] text-[#0E1F14] text-sm font-medium px-4 py-2 rounded-md hover:bg-[#9BCF5E] transition-colors"
+        >
           <Plus size={16} /> Add venue
         </button>
         <button
