@@ -2,23 +2,6 @@ import { NextResponse } from "next/server";
 import type { NextRequest } from "next/server";
 
 export function middleware(request: NextRequest) {
-  const isLoginPage = request.nextUrl.pathname === "/login";
-  
-  const cookies = request.cookies.getAll();
-  
-  // Check for any supabase cookie
-  const hasAuth = cookies.some(
-    (cookie) => cookie.name.startsWith("sb-")
-  );
-
-  if (!hasAuth && !isLoginPage) {
-    return NextResponse.redirect(new URL("/login", request.url));
-  }
-
-  if (hasAuth && isLoginPage) {
-    return NextResponse.redirect(new URL("/", request.url));
-  }
-
   return NextResponse.next();
 }
 
