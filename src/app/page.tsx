@@ -37,18 +37,27 @@ export default function Page() {
   }, []);
 
   // Fetch venues
-  useEffect(() => {
-    fetch("/api/venues")
-      .then((r) => r.json())
-      .then((data) => {
-        if (Array.isArray(data) && data.length > 0) {
-          setVenues(data);
-          setActiveVenue(data[0].id);
-        }
-        setLoading(false);
-      })
-      .catch(() => setLoading(false));
-  }, []);
+useEffect(() => {
+  const fetchVenues = async () => {
+    const supabase = getSupabaseAuth();
+    const { data: sessionData } = await supabase.auth.getSession();
+    const token = sessionData?.session?.access_token;
+
+    const res = await fetch("/api/venues", {
+      headers: {
+        Authorization: `Bearer ${token}`,
+      },
+    });
+    const data = await res.json();
+    if (Array.isArray(data) && data.length > 0) {
+      setVenues(data);
+      setActiveVenue(data[0].id);
+    }
+    setLoading(false);
+  };
+  fetchVenues().catch(() => setLoading(false));
+}, []);
+
 
   // Fetch bookings
   useEffect(() => {
