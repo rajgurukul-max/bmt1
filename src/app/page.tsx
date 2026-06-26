@@ -8,6 +8,7 @@ import StatCard from "@/components/StatCard";
 import BookingList from "@/components/BookingList";
 import SlotCalendar from "@/components/SlotCalendar";
 import PayoutsPanel from "@/components/PayoutsPanel";
+import AddVenueModal from "@/components/AddVenueModal";
 import { HOURS, getNextDays, SlotStatus } from "@/lib/data";
 import { getSupabaseAuth } from "@/lib/auth";
 
@@ -21,17 +22,19 @@ export default function Page() {
   const [venues, setVenues] = useState<any[]>([]);
   const [bookings, setBookings] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
-// Auth check
-useEffect(() => {
-  const checkAuth = async () => {
-    const supabase = getSupabaseAuth();
-    const { data } = await supabase.auth.getSession();
-    if (!data.session) {
-      window.location.href = "/login";
-    }
-  };
-  checkAuth();
-}, []);
+  const [showAddVenue, setShowAddVenue] = useState(false);
+
+  // Auth check
+  useEffect(() => {
+    const checkAuth = async () => {
+      const supabase = getSupabaseAuth();
+      const { data } = await supabase.auth.getSession();
+      if (!data.session) {
+        window.location.href = "/login";
+      }
+    };
+    checkAuth();
+  }, []);
 
   // Fetch venues
   useEffect(() => {
@@ -80,11 +83,7 @@ useEffect(() => {
     const current = slots[key];
     if (current === "booked") return;
     const newStatus = current === "open" ? "blocked" : "open";
-
-    // Optimistic update
     setSlots((prev) => ({ ...prev, [key]: newStatus }));
-
-    // Save to database
     const date = DAYS[activeDay].toISOString().split("T")[0];
     await fetch("/api/slots", {
       method: "POST",
@@ -93,20 +92,31 @@ useEffect(() => {
     });
   };
 
+  const handleVenueSaved = (newVenue: any) => {
+    setVenues((prev) => [...prev, newVenue]);
+    setActiveVenue(newVenue.id);
+  };
+
   const stats = {
     todayRevenue: bookings
       .filter((b) => b.status === "confirmed")
       .reduce((a: number, b: any) => a + (b.amount || 0), 0),
     todayBookings: bookings.length,
     occupancy: Object.values(slots).length
-      ? Math.round((Object.values(slots).filter((s) => s === "booked").length / Object.values(slots).length) * 100)
+      ? Math.round(
+          (Object.values(slots).filter((s) => s === "booked").length /
+            Object.values(slots).length) *
+            100
+        )
       : 0,
   };
 
   if (loading) {
     return (
       <div className="min-h-screen w-full bg-[#0E1F14] text-[#F4F7ED] flex items-center justify-center">
-        <p className="text-[#8BC34A] font-mono animate-pulse">Loading BookMyTurfs...</p>
+        <p className="text-[#8BC34A] font-mono animate-pulse">
+          Loading BookMyTurfs...
+        </p>
       </div>
     );
   }
@@ -115,21 +125,35 @@ useEffect(() => {
     <div className="min-h-screen w-full bg-[#0E1F14] text-[#F4F7ED] flex font-sans">
       <Sidebar activeTab={tab} onChange={setTab} venues={venues} />
       <main className="flex-1 overflow-auto">
-        <Header tab={tab} />
+        <Header tab={tab} onAddVenue={() => setShowAddVenue(true)} />
         <div className="p-8">
           {tab === "dashboard" && (
             <>
               <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 mb-8">
-                <StatCard icon={IndianRupee} label="Total revenue" value={`₹${stats.todayRevenue.toLocaleString("en-IN")}`} />
-                <StatCard icon={Receipt} label="Total bookings" value={stats.todayBookings} />
-                <StatCard icon={TrendingUp} label="Slot occupancy" value={`${stats.occupancy}%`} />
+                <StatCard
+                  icon={IndianRupee}
+                  label="Total revenue"
+                  value={`₹${stats.todayRevenue.toLocaleString("en-IN")}`}
+                />
+                <StatCard
+                  icon={Receipt}
+                  label="Total bookings"
+                  value={stats.todayBookings}
+                />
+                <StatCard
+                  icon={TrendingUp}
+                  label="Slot occupancy"
+                  value={`${stats.occupancy}%`}
+                />
               </div>
               <div className="bg-[#16291C] border border-[#1E3324] rounded-lg p-6">
                 <h2 className="text-sm font-medium text-[#9FB0A3] mb-4 uppercase tracking-wide">
                   Recent bookings
                 </h2>
                 {bookings.length === 0 ? (
-                  <p className="text-[#5C7066] text-sm">No bookings yet — they'll appear here once users start booking.</p>
+                  <p className="text-[#5C7066] text-sm">
+                    No bookings yet — they'll appear here once users start booking.
+                  </p>
                 ) : (
                   <BookingList bookings={bookings.slice(0, 3)} />
                 )}
@@ -150,7 +174,13 @@ useEffect(() => {
           )}
           {tab === "calendar" && venues.length === 0 && (
             <div className="bg-[#16291C] border border-[#1E3324] rounded-lg p-8 text-center">
-              <p className="text-[#9FB0A3]">No venues yet — add one in Supabase to get started.</p>
+              <p className="text-[#9FB0A3] mb-4">No venues yet</p>
+              <button
+                onClick={() => setShowAddVenue(true)}
+                className="bg-[#8BC34A] text-[#0E1F14] px-4 py-2 rounded-md text-sm font-medium"
+              >
+                Add your first venue
+              </button>
             </div>
           )}
           {tab === "bookings" && (
@@ -165,6 +195,12 @@ useEffect(() => {
           {tab === "payouts" && <PayoutsPanel />}
         </div>
       </main>
+      {showAddVenue && (
+        <AddVenueModal
+          onClose={() => setShowAddVenue(false)}
+          onSave={handleVenueSaved}
+        />
+      )}
     </div>
   );
 }
