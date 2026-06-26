@@ -9,6 +9,7 @@ import BookingList from "@/components/BookingList";
 import SlotCalendar from "@/components/SlotCalendar";
 import PayoutsPanel from "@/components/PayoutsPanel";
 import { HOURS, getNextDays, SlotStatus } from "@/lib/data";
+import { getSupabaseAuth } from "@/lib/auth";
 
 const DAYS = getNextDays(5);
 
@@ -20,6 +21,17 @@ export default function Page() {
   const [venues, setVenues] = useState<any[]>([]);
   const [bookings, setBookings] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
+// Auth check
+useEffect(() => {
+  const checkAuth = async () => {
+    const supabase = getSupabaseAuth();
+    const { data } = await supabase.auth.getSession();
+    if (!data.session) {
+      window.location.href = "/login";
+    }
+  };
+  checkAuth();
+}, []);
 
   // Fetch venues
   useEffect(() => {
