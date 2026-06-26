@@ -24,34 +24,46 @@ export default function AddVenueModal({
   const [error, setError] = useState("");
 
   const handleSave = async () => {
-    if (!form.name || !form.area || !form.sport || !form.price_per_hour) {
-      setError("Please fill in all required fields");
-      return;
+  if (!form.name || !form.area || !form.sport || !form.price_per_hour) {
+    setError("Please fill in all required fields");
+    return;
+  }
+  setLoading(true);
+  setError("");
+  try {
+    // Get current user session
+    const { getSupabaseAuth } = await import("@/lib/auth");
+    const supabase = getSupabaseAuth();
+    const { data: sessionData } = await supabase.auth.getSession();
+    const token = sessionData?.session?.access_token;
+    const userId = sessionData?.session?.user?.id;
+
+    const res = await fetch("/api/venues", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${token}`,
+      },
+      body: JSON.stringify({
+        ...form,
+        price_per_hour: parseInt(form.price_per_hour),
+        is_active: true,
+        owner_id: userId,
+      }),
+    });
+    const data = await res.json();
+    if (data.error) {
+      setError(data.error);
+    } else {
+      onSave(data[0]);
+      onClose();
     }
-    setLoading(true);
-    setError("");
-    try {
-      const res = await fetch("/api/venues", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          ...form,
-          price_per_hour: parseInt(form.price_per_hour),
-          is_active: true,
-        }),
-      });
-      const data = await res.json();
-      if (data.error) {
-        setError(data.error);
-      } else {
-        onSave(data[0]);
-        onClose();
-      }
-    } catch (e) {
-      setError("Failed to save venue");
-    }
-    setLoading(false);
-  };
+  } catch (e) {
+    setError("Failed to save venue");
+  }
+  setLoading(false);
+};
+
 
   return (
     <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50 px-4">
