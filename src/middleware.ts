@@ -4,7 +4,6 @@ import type { NextRequest } from "next/server";
 export function middleware(request: NextRequest) {
   const isLoginPage = request.nextUrl.pathname === "/login";
   
-  // Check for any Supabase auth cookie
   const cookies = request.cookies.getAll();
   const hasAuth = cookies.some(
     (cookie) =>
