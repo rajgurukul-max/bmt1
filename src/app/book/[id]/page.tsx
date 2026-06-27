@@ -58,63 +58,80 @@ export default function VenuePage({ params }: { params: { id: string } }) {
   };
 
   const handlePayment = async () => {
-    if (!selectedSlot || !booking.name || !booking.phone) return;
-    setPaying(true);
+  if (!selectedSlot || !booking.name || !booking.phone) return;
+  setPaying(true);
 
-    try {
-      // Create Razorpay order
-      const orderRes = await fetch("/api/payment/create-order", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          amount: venue?.price_per_hour,
-          venue_name: venue?.name,
-        }),
-      });
-      const order = await orderRes.json();
+  try {
+    // Step 1 — Create booking first with pending status
+    const bookingRes = await fetch("/api/public/bookings", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        venue_id: params.id,
+        hour: selectedSlot,
+        date: selectedDate,
+        player_name: booking.name,
+        player_phone: booking.phone,
+        players: parseInt(booking.players) || 1,
+        amount: venue?.price_per_hour,
+        status: "pending",
+        payment_id: "",
+        booking_date: selectedDate,
+      }),
+    });
+    const bookingData = await bookingRes.json();
+    const bookingId = bookingData?.[0]?.id;
 
-      // Open Razorpay checkout
-      const options = {
-        key: process.env.NEXT_PUBLIC_RAZORPAY_KEY_ID,
-        amount: order.amount,
-        currency: "INR",
-        name: "BookMyTurfs",
-        description: `${venue?.name} - ${selectedSlot}:00 ${selectedSlot < 12 ? "AM" : "PM"}`,
-        order_id: order.id,
-        prefill: {
-          name: booking.name,
-          contact: booking.phone,
-        },
-        theme: { color: "#8BC34A" },
-        handler: async (response: any) => {
-          // Payment successful — create booking
-          await fetch("/api/public/bookings", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              venue_id: params.id,
-              hour: selectedSlot,
-              date: selectedDate,
-              player_name: booking.name,
-              player_phone: booking.phone,
-              players: parseInt(booking.players) || 1,
-              amount: venue?.price_per_hour,
-              status: "confirmed",
-              payment_id: response.razorpay_payment_id,
-              booking_date: selectedDate,
-            }),
-          });
-          setBooked(true);
-        },
-      };
+    // Step 2 — Create Razorpay order
+    const orderRes = await fetch("/api/payment/create-order", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        amount: venue?.price_per_hour,
+        venue_name: venue?.name,
+        booking_id: bookingId,
+      }),
+    });
+    const order = await orderRes.json();
 
-      const rzp = new window.Razorpay(options);
-      rzp.open();
-    } catch (e) {
-      alert("Payment failed. Please try again.");
-    }
+    // Step 3 — Open Razorpay
+    const options = {
+      key: process.env.NEXT_PUBLIC_RAZORPAY_KEY_ID,
+      amount: order.amount,
+      currency: "INR",
+      name: "BookMyTurfs",
+      description: `${venue?.name} - ${selectedSlot}:00 ${selectedSlot < 12 ? "AM" : "PM"}`,
+      order_id: order.id,
+      prefill: {
+        name: booking.name,
+        contact: booking.phone,
+      },
+      theme: { color: "#8BC34A" },
+      handler: async (response: any) => {
+        // Card payment success
+        await fetch(`/api/payment/confirm`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            booking_id: bookingId,
+            payment_id: response.razorpay_payment_id,
+          }),
+        });
+        setBooked(true);
+      },
+      modal: {
+        ondismiss: () => setPaying(false),
+      },
+    };
+
+    const rzp = new window.Razorpay(options);
+    rzp.open();
+  } catch (e) {
+    alert("Something went wrong. Please try again.");
     setPaying(false);
-  };
+  }
+};
+
 
   if (loading) {
     return (
