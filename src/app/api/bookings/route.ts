@@ -27,7 +27,7 @@ export async function GET(req: Request) {
 
   // Get bookings using service key to bypass RLS
   const bookingsRes = await fetch(
-    `${url}/rest/v1/bookings?venue_id=in.(${venueIds})&select=*&order=created_at.desc&limit=50`,
+    `${url}/rest/v1/bookings?venue_id=in.(${venueIds})&select=*,venues(name,area)&order=created_at.desc&limit=50`,
     {
       headers: {
         apikey: key!,
