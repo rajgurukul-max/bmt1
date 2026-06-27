@@ -67,18 +67,18 @@ export default function VenuePage({ params }: { params: { id: string } }) {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        venue_id: params.id,
-        hour: selectedSlot,
-        date: selectedDate,
-        player_name: booking.name,
-        player_phone: booking.phone,
-        players: parseInt(booking.players) || 1,
-        amount: venue?.price_per_hour,
-        status: "pending",
-        payment_id: "",
-        booking_date: selectedDate,
-      }),
-    });
+  venue_id: params.id,
+  hour: Number(selectedSlot),
+  date: selectedDate,
+  player_name: String(booking.name),
+  player_phone: String(booking.phone),
+  players: Number(booking.players) || 1,
+  amount: Number(venue?.price_per_hour),
+  status: "pending",
+  payment_id: "",
+  booking_date: selectedDate,
+}),
+ });
     const bookingData = await bookingRes.json();
     const bookingId = bookingData?.[0]?.id;
 
