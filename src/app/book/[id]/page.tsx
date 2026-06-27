@@ -5,6 +5,12 @@ import { MapPin, IndianRupee, ArrowLeft } from "lucide-react";
 
 const HOURS = Array.from({ length: 14 }, (_, i) => 6 + i);
 
+declare global {
+  interface Window {
+    Razorpay: any;
+  }
+}
+
 export default function VenuePage({ params }: { params: { id: string } }) {
   const [venue, setVenue] = useState<any>(null);
   const [slots, setSlots] = useState<any[]>([]);
@@ -14,6 +20,7 @@ export default function VenuePage({ params }: { params: { id: string } }) {
   const [selectedSlot, setSelectedSlot] = useState<number | null>(null);
   const [booking, setBooking] = useState({ name: "", phone: "", players: "" });
   const [loading, setLoading] = useState(true);
+  const [paying, setPaying] = useState(false);
   const [booked, setBooked] = useState(false);
 
   const DAYS = Array.from({ length: 5 }, (_, i) => {
@@ -23,6 +30,12 @@ export default function VenuePage({ params }: { params: { id: string } }) {
   });
 
   useEffect(() => {
+    // Load Razorpay script
+    const script = document.createElement("script");
+    script.src = "https://checkout.razorpay.com/v1/checkout.js";
+    script.async = true;
+    document.body.appendChild(script);
+
     fetch(`/api/public/venues/${params.id}`)
       .then((r) => r.json())
       .then((data) => {
@@ -44,25 +57,63 @@ export default function VenuePage({ params }: { params: { id: string } }) {
     return slot ? slot.status : "open";
   };
 
-  const handleBook = async () => {
+  const handlePayment = async () => {
     if (!selectedSlot || !booking.name || !booking.phone) return;
-    const res = await fetch("/api/public/bookings", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        venue_id: params.id,
-        hour: selectedSlot,
-        date: selectedDate,
-        player_name: booking.name,
-        player_phone: booking.phone,
-        players: parseInt(booking.players) || 1,
-        amount: venue?.price_per_hour || 0,
-        status: "pending",
-        booking_date: selectedDate,
-      }),
-    });
-    const data = await res.json();
-    if (!data.error) setBooked(true);
+    setPaying(true);
+
+    try {
+      // Create Razorpay order
+      const orderRes = await fetch("/api/payment/create-order", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          amount: venue?.price_per_hour,
+          venue_name: venue?.name,
+        }),
+      });
+      const order = await orderRes.json();
+
+      // Open Razorpay checkout
+      const options = {
+        key: process.env.NEXT_PUBLIC_RAZORPAY_KEY_ID,
+        amount: order.amount,
+        currency: "INR",
+        name: "BookMyTurfs",
+        description: `${venue?.name} - ${selectedSlot}:00 ${selectedSlot < 12 ? "AM" : "PM"}`,
+        order_id: order.id,
+        prefill: {
+          name: booking.name,
+          contact: booking.phone,
+        },
+        theme: { color: "#8BC34A" },
+        handler: async (response: any) => {
+          // Payment successful — create booking
+          await fetch("/api/public/bookings", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              venue_id: params.id,
+              hour: selectedSlot,
+              date: selectedDate,
+              player_name: booking.name,
+              player_phone: booking.phone,
+              players: parseInt(booking.players) || 1,
+              amount: venue?.price_per_hour,
+              status: "confirmed",
+              payment_id: response.razorpay_payment_id,
+              booking_date: selectedDate,
+            }),
+          });
+          setBooked(true);
+        },
+      };
+
+      const rzp = new window.Razorpay(options);
+      rzp.open();
+    } catch (e) {
+      alert("Payment failed. Please try again.");
+    }
+    setPaying(false);
   };
 
   if (loading) {
@@ -82,11 +133,12 @@ export default function VenuePage({ params }: { params: { id: string } }) {
             Booking Confirmed!
           </h1>
           <p className="text-[#9FB0A3] mb-2">{venue?.name}</p>
-          <p className="text-[#8BC34A] font-mono mb-6">
-            {selectedDate} at {selectedSlot}:00 {selectedSlot! < 12 ? "AM" : "PM"}
+          <p className="text-[#8BC34A] font-mono mb-2">
+            {selectedDate} at {selectedSlot}:00{" "}
+            {selectedSlot! < 12 ? "AM" : "PM"}
           </p>
           <p className="text-[#9FB0A3] text-sm mb-6">
-            The venue owner will confirm your booking shortly.
+            Payment successful! See you at the turf. 🏏
           </p>
           <a
             href="/book"
@@ -111,7 +163,6 @@ export default function VenuePage({ params }: { params: { id: string } }) {
       </div>
 
       <div className="max-w-2xl mx-auto px-6 py-8">
-        {/* Venue info */}
         <div className="mb-6">
           <h1 className="text-2xl font-bold mb-1">{venue?.name}</h1>
           <div className="flex items-center gap-4 text-sm text-[#9FB0A3]">
@@ -192,13 +243,15 @@ export default function VenuePage({ params }: { params: { id: string } }) {
         {selectedSlot && (
           <div className="bg-[#16291C] border border-[#1E3324] rounded-xl p-5">
             <h2 className="font-medium mb-4">
-              Booking for {selectedSlot % 12 === 0 ? 12 : selectedSlot % 12}:00{" "}
-              {selectedSlot < 12 ? "AM" : "PM"}
+              Booking for {selectedSlot % 12 === 0 ? 12 : selectedSlot % 12}
+              :00 {selectedSlot < 12 ? "AM" : "PM"}
             </h2>
             <div className="space-y-3 mb-4">
               <input
                 value={booking.name}
-                onChange={(e) => setBooking({ ...booking, name: e.target.value })}
+                onChange={(e) =>
+                  setBooking({ ...booking, name: e.target.value })
+                }
                 placeholder="Your name *"
                 className="w-full bg-[#0E1F14] border border-[#2C4A33] rounded-lg px-3 py-2.5 text-sm text-[#F4F7ED] placeholder-[#5C7066] focus:outline-none focus:border-[#8BC34A]"
               />
@@ -228,11 +281,11 @@ export default function VenuePage({ params }: { params: { id: string } }) {
               </span>
             </div>
             <button
-              onClick={handleBook}
-              disabled={!booking.name || !booking.phone}
+              onClick={handlePayment}
+              disabled={paying || !booking.name || !booking.phone}
               className="w-full bg-[#8BC34A] text-[#0E1F14] font-medium py-3 rounded-lg hover:bg-[#9BCF5E] transition-colors disabled:opacity-50"
             >
-              Confirm Booking
+              {paying ? "Processing..." : `Pay ₹${venue?.price_per_hour?.toLocaleString("en-IN")}`}
             </button>
           </div>
         )}
