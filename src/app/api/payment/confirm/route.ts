@@ -50,7 +50,10 @@ export async function POST(req: Request) {
     const ownerEmail = owners?.[0]?.email;
 
     // Send notification
+    console.log("Owner email found:", ownerEmail);
+    console.log("Sending notification...");
     if (ownerEmail) {
+
       await fetch(`https://www.bookmyturfs.com/api/notify/booking`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
