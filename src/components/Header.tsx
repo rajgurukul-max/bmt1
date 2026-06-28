@@ -22,7 +22,7 @@ export default function Header({
   const handleLogout = async () => {
     const supabase = getSupabaseAuth();
     await supabase.auth.signOut();
-    window.location.href = "/login";
+    window.location.href = "/owner/login";
   };
 
   return (
