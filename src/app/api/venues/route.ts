@@ -30,7 +30,6 @@ export async function POST(req: Request) {
   
   const body = await req.json();
 
-  // Get user ID from token to set owner_id
   const userRes = await fetch(`${url}/auth/v1/user`, {
     headers: {
       apikey: key!,
@@ -43,7 +42,7 @@ export async function POST(req: Request) {
     method: "POST",
     headers: {
       apikey: key!,
-      Authorization: `Bearer ${key}`,
+      Authorization: `Bearer ${token}`,
       "Content-Type": "application/json",
       Prefer: "return=representation",
     },
@@ -56,4 +55,3 @@ export async function POST(req: Request) {
   const data = await res.json();
   return Response.json(data);
 }
-
