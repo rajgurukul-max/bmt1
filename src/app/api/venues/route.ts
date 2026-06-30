@@ -22,7 +22,6 @@ export async function GET(req: Request) {
   const data = await res.json();
   return Response.json(data);
 }
-
 export async function POST(req: Request) {
   const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
   const key = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
@@ -31,17 +30,30 @@ export async function POST(req: Request) {
   
   const body = await req.json();
 
+  // Get user ID from token to set owner_id
+  const userRes = await fetch(`${url}/auth/v1/user`, {
+    headers: {
+      apikey: key!,
+      Authorization: `Bearer ${token}`,
+    },
+  });
+  const user = await userRes.json();
+
   const res = await fetch(`${url}/rest/v1/venues`, {
     method: "POST",
     headers: {
       apikey: key!,
-      Authorization: `Bearer ${token}`,
+      Authorization: `Bearer ${key}`,
       "Content-Type": "application/json",
       Prefer: "return=representation",
     },
-    body: JSON.stringify(body),
+    body: JSON.stringify({
+      ...body,
+      owner_id: user?.id || body.owner_id,
+    }),
   });
 
   const data = await res.json();
   return Response.json(data);
 }
+
