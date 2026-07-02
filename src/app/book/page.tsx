@@ -161,7 +161,8 @@ export default function BookPage() {
           </div>
         ) : (
           <div className="space-y-10">
-            {Object.entries(grouped).map(([complexName, complexVenues]) => (
+            {(Object.entries(grouped) as [string, any[]][]).map(([complexName, complexVenues]) => (
+
               <div key={complexName}>
                 {/* Complex heading */}
                 <div className="flex items-center gap-2 mb-3">
