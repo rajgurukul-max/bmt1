@@ -2,68 +2,92 @@
 import { useState } from "react";
 import { X } from "lucide-react";
 
-const SPORTS = ["Cricket", "Football", "Badminton", "Tennis", "Basketball"];
-const AREAS = ["Andheri West", "Andheri East", "Powai", "Malad West", "Malad East", "Bandra", "Juhu", "Borivali", "Kandivali", "Goregaon", "Kurla", "Thane", "Navi Mumbai"];
+const SPORTS = [
+  "Football", "Cricket", "Box Cricket", "Badminton", "Tennis",
+  "Swimming", "Pickleball", "Basketball", "Volleyball",
+  "Table Tennis", "Squash", "Futsal", "Skating", "Golf"
+];
+
+const AREAS = [
+  "Andheri West", "Andheri East", "Powai", "Malad West", "Malad East",
+  "Bandra", "Juhu", "Borivali", "Kandivali", "Goregaon", "Kurla",
+  "Thane", "Navi Mumbai", "Kharghar", "Nerul", "Vashi", "Dadar",
+  "Chembur", "Mulund", "Vikhroli"
+];
 
 export default function AddVenueModal({
   onClose,
   onSave,
+  existingComplexNames = [],
 }: {
   onClose: () => void;
   onSave: (venue: any) => void;
+  existingComplexNames?: string[];
 }) {
   const [form, setForm] = useState({
+    complex_name: "",
+    facility_label: "",
     name: "",
     area: "",
-    sport: "",
+    sport_type: "",
     address: "",
     price_per_hour: "",
     description: "",
   });
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
+  const [showComplexSuggestions, setShowComplexSuggestions] = useState(false);
+
+  const filteredComplexNames = existingComplexNames.filter(c =>
+    c.toLowerCase().includes(form.complex_name.toLowerCase())
+  );
 
   const handleSave = async () => {
-  if (!form.name || !form.area || !form.sport || !form.price_per_hour) {
-    setError("Please fill in all required fields");
-    return;
-  }
-  setLoading(true);
-  setError("");
-  try {
-    // Get current user session
-    const { getSupabaseAuth } = await import("@/lib/auth");
-    const supabase = getSupabaseAuth();
-    const { data: sessionData } = await supabase.auth.getSession();
-    const token = sessionData?.session?.access_token;
-    const userId = sessionData?.session?.user?.id;
-
-    const res = await fetch("/api/venues", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${token}`,
-      },
-      body: JSON.stringify({
-        ...form,
-        price_per_hour: parseInt(form.price_per_hour),
-        is_active: true,
-        owner_id: userId,
-      }),
-    });
-    const data = await res.json();
-    if (data.error) {
-      setError(data.error);
-    } else {
-      onSave(data[0]);
-      onClose();
+    if (!form.name || !form.area || !form.sport_type || !form.price_per_hour) {
+      setError("Please fill in all required fields");
+      return;
     }
-  } catch (e) {
-    setError("Failed to save venue");
-  }
-  setLoading(false);
-};
+    setLoading(true);
+    setError("");
+    try {
+      const { getSupabaseAuth } = await import("@/lib/auth");
+      const supabase = getSupabaseAuth();
+      const { data: sessionData } = await supabase.auth.getSession();
+      const token = sessionData?.session?.access_token;
+      const userId = sessionData?.session?.user?.id;
 
+      const res = await fetch("/api/venues", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({
+          name: form.name,
+          area: form.area,
+          sport: form.sport_type,
+          sport_type: form.sport_type,
+          complex_name: form.complex_name || null,
+          facility_label: form.facility_label || null,
+          address: form.address,
+          price_per_hour: parseInt(form.price_per_hour),
+          description: form.description,
+          is_active: true,
+          owner_id: userId,
+        }),
+      });
+      const data = await res.json();
+      if (data.error) {
+        setError(data.error);
+      } else {
+        onSave(data[0]);
+        onClose();
+      }
+    } catch (e) {
+      setError("Failed to save venue");
+    }
+    setLoading(false);
+  };
 
   return (
     <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50 px-4">
@@ -76,21 +100,70 @@ export default function AddVenueModal({
         </div>
 
         <div className="px-6 py-4 space-y-4">
+
+          {/* Complex Name */}
+          <div className="relative">
+            <label className="block text-xs text-[#9FB0A3] mb-1">
+              Complex Name <span className="text-[#5C7066]">(optional — group multiple courts)</span>
+            </label>
+            <input
+              value={form.complex_name}
+              onChange={(e) => {
+                setForm({ ...form, complex_name: e.target.value });
+                setShowComplexSuggestions(true);
+              }}
+              onBlur={() => setTimeout(() => setShowComplexSuggestions(false), 200)}
+              placeholder="e.g. Greenfield Sports Complex"
+              className="w-full bg-[#0E1F14] border border-[#2C4A33] rounded-lg px-3 py-2.5 text-[#F4F7ED] text-sm placeholder-[#5C7066] focus:outline-none focus:border-[#8BC34A]"
+            />
+            {showComplexSuggestions && filteredComplexNames.length > 0 && (
+              <div className="absolute z-10 w-full bg-[#16291C] border border-[#2C4A33] rounded-lg mt-1">
+                {filteredComplexNames.map(name => (
+                  <button
+                    key={name}
+                    className="w-full text-left px-3 py-2 text-sm text-[#F4F7ED] hover:bg-[#1E3324]"
+                    onClick={() => {
+                      setForm({ ...form, complex_name: name });
+                      setShowComplexSuggestions(false);
+                    }}
+                  >
+                    {name}
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+
+          {/* Facility Label */}
+          <div>
+            <label className="block text-xs text-[#9FB0A3] mb-1">
+              Facility Label <span className="text-[#5C7066]">(optional — e.g. Turf 1, Pool A, Court 3)</span>
+            </label>
+            <input
+              value={form.facility_label}
+              onChange={(e) => setForm({ ...form, facility_label: e.target.value })}
+              placeholder="e.g. Turf 1"
+              className="w-full bg-[#0E1F14] border border-[#2C4A33] rounded-lg px-3 py-2.5 text-[#F4F7ED] text-sm placeholder-[#5C7066] focus:outline-none focus:border-[#8BC34A]"
+            />
+          </div>
+
+          {/* Venue Name */}
           <div>
             <label className="block text-xs text-[#9FB0A3] mb-1">Venue Name *</label>
             <input
               value={form.name}
               onChange={(e) => setForm({ ...form, name: e.target.value })}
-              placeholder="e.g. Greenfield Box Cricket"
+              placeholder="e.g. Greenfield Box Cricket Turf 1"
               className="w-full bg-[#0E1F14] border border-[#2C4A33] rounded-lg px-3 py-2.5 text-[#F4F7ED] text-sm placeholder-[#5C7066] focus:outline-none focus:border-[#8BC34A]"
             />
           </div>
 
+          {/* Sport Type */}
           <div>
             <label className="block text-xs text-[#9FB0A3] mb-1">Sport *</label>
             <select
-              value={form.sport}
-              onChange={(e) => setForm({ ...form, sport: e.target.value })}
+              value={form.sport_type}
+              onChange={(e) => setForm({ ...form, sport_type: e.target.value })}
               className="w-full bg-[#0E1F14] border border-[#2C4A33] rounded-lg px-3 py-2.5 text-[#F4F7ED] text-sm focus:outline-none focus:border-[#8BC34A]"
             >
               <option value="">Select sport</option>
@@ -98,6 +171,7 @@ export default function AddVenueModal({
             </select>
           </div>
 
+          {/* Area */}
           <div>
             <label className="block text-xs text-[#9FB0A3] mb-1">Area *</label>
             <select
@@ -110,16 +184,18 @@ export default function AddVenueModal({
             </select>
           </div>
 
+          {/* Address */}
           <div>
             <label className="block text-xs text-[#9FB0A3] mb-1">Full Address</label>
             <input
               value={form.address}
               onChange={(e) => setForm({ ...form, address: e.target.value })}
-              placeholder="e.g. Link Road, Andheri West, Mumbai"
+              placeholder="e.g. Link Road, Andheri West, Mumbai 400058"
               className="w-full bg-[#0E1F14] border border-[#2C4A33] rounded-lg px-3 py-2.5 text-[#F4F7ED] text-sm placeholder-[#5C7066] focus:outline-none focus:border-[#8BC34A]"
             />
           </div>
 
+          {/* Price */}
           <div>
             <label className="block text-xs text-[#9FB0A3] mb-1">Price per hour (₹) *</label>
             <input
@@ -131,6 +207,7 @@ export default function AddVenueModal({
             />
           </div>
 
+          {/* Description */}
           <div>
             <label className="block text-xs text-[#9FB0A3] mb-1">Description</label>
             <textarea
