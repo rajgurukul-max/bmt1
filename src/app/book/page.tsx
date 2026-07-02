@@ -42,6 +42,13 @@ export default function BookPage() {
     return matchSport && matchSearch;
   });
 
+  const grouped = filtered.reduce((acc: Record<string, any[]>, v) => {
+    const key = v.complex_name?.trim() || v.name;
+    if (!acc[key]) acc[key] = [];
+    acc[key].push(v);
+    return acc;
+  }, {});
+
   return (
     <div className="min-h-screen bg-[#0E1F14] text-[#F4F7ED]">
       {/* Navbar */}
@@ -140,7 +147,7 @@ export default function BookPage() {
           )}
         </div>
 
-        {/* Venues grid */}
+        {/* Venues grouped by complex */}
         {loading ? (
           <div className="text-center py-16">
             <p className="text-[#8BC34A] font-mono animate-pulse">
@@ -153,46 +160,68 @@ export default function BookPage() {
             <p className="text-[#9FB0A3]">No turfs found — try a different search.</p>
           </div>
         ) : (
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-            {filtered.map((v) => (
-              <a
-                key={v.id}
-                href={`/book/${v.id}`}
-                className="bg-[#16291C] border border-[#1E3324] rounded-xl p-5 hover:border-[#8BC34A] transition-all hover:shadow-lg hover:shadow-[#8BC34A]/10 group"
-              >
-                {/* Sport badge */}
-                <div className="flex items-start justify-between mb-3">
-                  <div>
-                    <h2 className="font-semibold text-[#F4F7ED] group-hover:text-[#8BC34A] transition-colors">
-                      {v.name}
-                    </h2>
-                    <div className="flex items-center gap-1 text-[#9FB0A3] text-xs mt-1">
-                      <MapPin size={11} />
-                      {v.area}, Mumbai
-                    </div>
-                  </div>
-                  <span className="text-lg">
-                    {SPORTS.find((s) => s.name === v.sport)?.icon || "🏆"}
+          <div className="space-y-10">
+            {Object.entries(grouped).map(([complexName, complexVenues]) => (
+              <div key={complexName}>
+                {/* Complex heading */}
+                <div className="flex items-center gap-2 mb-3">
+                  <h3 className="text-base font-semibold text-[#F4F7ED]">
+                    {complexName}
+                  </h3>
+                  <span className="text-xs text-[#5C7066] flex items-center gap-1">
+                    <MapPin size={11} />
+                    {complexVenues[0]?.area}, Mumbai
+                  </span>
+                  <span className="text-xs text-[#8BC34A] ml-auto">
+                    {complexVenues.length}{" "}
+                    {complexVenues.length === 1 ? "turf" : "turfs"}
                   </span>
                 </div>
 
-                <p className="text-xs text-[#9FB0A3] mb-4 line-clamp-2">
-                  {v.description}
-                </p>
+                {/* Venues within this complex */}
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                  {complexVenues.map((v) => (
+                    <a
+                      key={v.id}
+                      href={`/book/${v.id}`}
+                      className="bg-[#16291C] border border-[#1E3324] rounded-xl p-5 hover:border-[#8BC34A] transition-all hover:shadow-lg hover:shadow-[#8BC34A]/10 group"
+                    >
+                      {/* Sport badge */}
+                      <div className="flex items-start justify-between mb-3">
+                        <div>
+                          <h2 className="font-semibold text-[#F4F7ED] group-hover:text-[#8BC34A] transition-colors">
+                            {v.name}
+                          </h2>
+                          <div className="flex items-center gap-1 text-[#9FB0A3] text-xs mt-1">
+                            <MapPin size={11} />
+                            {v.area}, Mumbai
+                          </div>
+                        </div>
+                        <span className="text-lg">
+                          {SPORTS.find((s) => s.name === v.sport)?.icon || "🏆"}
+                        </span>
+                      </div>
 
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center gap-1 font-mono text-sm text-[#F4F7ED]">
-                    <IndianRupee size={13} />
-                    <span className="font-semibold">
-                      {v.price_per_hour?.toLocaleString("en-IN")}
-                    </span>
-                    <span className="text-[#9FB0A3] text-xs">/hr</span>
-                  </div>
-                  <span className="text-xs bg-[#8BC34A]/20 text-[#8BC34A] px-2 py-1 rounded-full border border-[#8BC34A]/30 group-hover:bg-[#8BC34A] group-hover:text-[#0E1F14] transition-colors">
-                    Book now →
-                  </span>
+                      <p className="text-xs text-[#9FB0A3] mb-4 line-clamp-2">
+                        {v.description}
+                      </p>
+
+                      <div className="flex items-center justify-between">
+                        <div className="flex items-center gap-1 font-mono text-sm text-[#F4F7ED]">
+                          <IndianRupee size={13} />
+                          <span className="font-semibold">
+                            {v.price_per_hour?.toLocaleString("en-IN")}
+                          </span>
+                          <span className="text-[#9FB0A3] text-xs">/hr</span>
+                        </div>
+                        <span className="text-xs bg-[#8BC34A]/20 text-[#8BC34A] px-2 py-1 rounded-full border border-[#8BC34A]/30 group-hover:bg-[#8BC34A] group-hover:text-[#0E1F14] transition-colors">
+                          Book now →
+                        </span>
+                      </div>
+                    </a>
+                  ))}
                 </div>
-              </a>
+              </div>
             ))}
           </div>
         )}
