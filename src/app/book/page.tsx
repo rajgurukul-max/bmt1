@@ -47,7 +47,7 @@ export default function BookPage() {
     if (!acc[key]) acc[key] = [];
     acc[key].push(v);
     return acc;
-  }, {});
+  }, {} as Record<string, any[]>);
 
   return (
     <div className="min-h-screen bg-[#0E1F14] text-[#F4F7ED]">
