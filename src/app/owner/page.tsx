@@ -208,7 +208,7 @@ useEffect(() => {
   <AddVenueModal
     onClose={() => setShowAddVenue(false)}
     onSave={handleVenueSaved}
-    existingComplexNames={[...new Set(venues.map((v: any) => v.complex_name).filter(Boolean))]}
+    existingComplexNames={Array.from(new Set(venues.map((v: any) => v.complex_name).filter(Boolean)))}
   />
 )}
     </div>
