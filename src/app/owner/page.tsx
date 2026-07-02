@@ -205,11 +205,12 @@ useEffect(() => {
         </div>
       </main>
       {showAddVenue && (
-        <AddVenueModal
-          onClose={() => setShowAddVenue(false)}
-          onSave={handleVenueSaved}
-        />
-      )}
+  <AddVenueModal
+    onClose={() => setShowAddVenue(false)}
+    onSave={handleVenueSaved}
+    existingComplexNames={[...new Set(venues.map((v: any) => v.complex_name).filter(Boolean))]}
+  />
+)}
     </div>
   );
 }
