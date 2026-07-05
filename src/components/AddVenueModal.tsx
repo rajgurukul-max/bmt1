@@ -8,11 +8,30 @@ const SPORTS = [
   "Table Tennis", "Squash", "Futsal", "Skating", "Golf"
 ];
 
-const AREAS = [
-  "Andheri West", "Andheri East", "Powai", "Malad West", "Malad East",
-  "Bandra", "Juhu", "Borivali", "Kandivali", "Goregaon", "Kurla",
-  "Thane", "Navi Mumbai", "Kharghar", "Nerul", "Vashi", "Dadar",
-  "Chembur", "Mulund", "Vikhroli"
+const AREAS_BY_CITY: Record<string, string[]> = {
+  Mumbai: [
+    "Andheri West", "Andheri East", "Powai", "Malad West", "Malad East",
+    "Bandra", "Juhu", "Borivali", "Kandivali", "Goregaon", "Kurla",
+    "Thane", "Navi Mumbai", "Kharghar", "Nerul", "Vashi", "Dadar",
+    "Chembur", "Mulund", "Vikhroli"
+  ],
+};
+
+const CITIES = [
+  "Mumbai", "Delhi", "Bengaluru", "Hyderabad", "Ahmedabad", "Chennai",
+  "Kolkata", "Pune", "Jaipur", "Surat", "Lucknow", "Kanpur", "Nagpur",
+  "Indore", "Thane", "Bhopal", "Visakhapatnam", "Patna", "Vadodara",
+  "Ghaziabad", "Ludhiana", "Agra", "Nashik", "Faridabad", "Meerut",
+  "Rajkot", "Kalyan-Dombivli", "Vasai-Virar", "Varanasi", "Srinagar",
+  "Aurangabad", "Dhanbad", "Amritsar", "Navi Mumbai", "Allahabad",
+  "Ranchi", "Howrah", "Coimbatore", "Jabalpur", "Gwalior", "Vijayawada",
+  "Jodhpur", "Madurai", "Raipur", "Kota", "Guwahati", "Chandigarh",
+  "Thiruvananthapuram", "Solapur", "Hubballi-Dharwad", "Mysuru",
+  "Tiruchirappalli", "Bareilly", "Aligarh", "Tiruppur", "Gurugram",
+  "Moradabad", "Jalandhar", "Bhubaneswar", "Salem", "Warangal",
+  "Guntur", "Bhiwandi", "Noida", "Jamshedpur", "Cuttack", "Kochi",
+  "Dehradun", "Durgapur", "Ajmer", "Nellore", "Udaipur", "Shimla",
+  "Panaji", "Puducherry"
 ];
 
 export default function AddVenueModal({
@@ -28,6 +47,7 @@ export default function AddVenueModal({
     complex_name: "",
     facility_label: "",
     name: "",
+    city: "",
     area: "",
     sport_type: "",
     address: "",
@@ -43,7 +63,7 @@ export default function AddVenueModal({
   );
 
   const handleSave = async () => {
-    if (!form.name || !form.area || !form.sport_type || !form.price_per_hour) {
+    if (!form.name || !form.city || !form.area || !form.sport_type || !form.price_per_hour) {
       setError("Please fill in all required fields");
       return;
     }
@@ -64,6 +84,7 @@ export default function AddVenueModal({
         },
         body: JSON.stringify({
           name: form.name,
+          city: form.city,
           area: form.area,
           sport: form.sport_type,
           sport_type: form.sport_type,
@@ -158,6 +179,19 @@ export default function AddVenueModal({
             />
           </div>
 
+          {/* City */}
+          <div>
+            <label className="block text-xs text-[#9FB0A3] mb-1">City *</label>
+            <select
+              value={form.city}
+              onChange={(e) => setForm({ ...form, city: e.target.value, area: "" })}
+              className="w-full bg-[#0E1F14] border border-[#2C4A33] rounded-lg px-3 py-2.5 text-[#F4F7ED] text-sm focus:outline-none focus:border-[#8BC34A]"
+            >
+              <option value="">Select city</option>
+              {CITIES.map((c) => <option key={c} value={c}>{c}</option>)}
+            </select>
+          </div>
+
           {/* Sport Type */}
           <div>
             <label className="block text-xs text-[#9FB0A3] mb-1">Sport *</label>
@@ -174,14 +208,24 @@ export default function AddVenueModal({
           {/* Area */}
           <div>
             <label className="block text-xs text-[#9FB0A3] mb-1">Area *</label>
-            <select
-              value={form.area}
-              onChange={(e) => setForm({ ...form, area: e.target.value })}
-              className="w-full bg-[#0E1F14] border border-[#2C4A33] rounded-lg px-3 py-2.5 text-[#F4F7ED] text-sm focus:outline-none focus:border-[#8BC34A]"
-            >
-              <option value="">Select area</option>
-              {AREAS.map((a) => <option key={a} value={a}>{a}</option>)}
-            </select>
+            {form.city && AREAS_BY_CITY[form.city] ? (
+              <select
+                value={form.area}
+                onChange={(e) => setForm({ ...form, area: e.target.value })}
+                className="w-full bg-[#0E1F14] border border-[#2C4A33] rounded-lg px-3 py-2.5 text-[#F4F7ED] text-sm focus:outline-none focus:border-[#8BC34A]"
+              >
+                <option value="">Select area</option>
+                {AREAS_BY_CITY[form.city].map((a) => <option key={a} value={a}>{a}</option>)}
+              </select>
+            ) : (
+              <input
+                value={form.area}
+                onChange={(e) => setForm({ ...form, area: e.target.value })}
+                placeholder={form.city ? "e.g. Koramangala" : "Select a city first"}
+                disabled={!form.city}
+                className="w-full bg-[#0E1F14] border border-[#2C4A33] rounded-lg px-3 py-2.5 text-[#F4F7ED] text-sm placeholder-[#5C7066] focus:outline-none focus:border-[#8BC34A] disabled:opacity-50"
+              />
+            )}
           </div>
 
           {/* Address */}
