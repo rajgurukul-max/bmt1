@@ -171,7 +171,7 @@ export default function BookPage() {
                   </h3>
                   <span className="text-xs text-[#5C7066] flex items-center gap-1">
                     <MapPin size={11} />
-                    {complexVenues[0]?.area}, Mumbai
+                    {complexVenues[0]?.area}{complexVenues[0]?.city ? `, ${complexVenues[0].city}` : ""}
                   </span>
                   <span className="text-xs text-[#8BC34A] ml-auto">
                     {complexVenues.length}{" "}
@@ -195,8 +195,9 @@ export default function BookPage() {
                           </h2>
                           <div className="flex items-center gap-1 text-[#9FB0A3] text-xs mt-1">
                             <MapPin size={11} />
-                            {v.area}, Mumbai
+                            {v.area}{v.city ? `, ${v.city}` : ""}
                           </div>
+
                         </div>
                         <span className="text-lg">
                           {SPORTS.find((s) => s.name === v.sport)?.icon || "🏆"}
