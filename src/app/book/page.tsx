@@ -69,10 +69,10 @@ export default function BookPage() {
         <div className="absolute inset-0 bg-gradient-to-b from-[#1A3D20] to-[#0E1F14] opacity-80" />
         <div className="relative px-6 py-16 text-center max-w-3xl mx-auto">
           <div className="inline-block bg-[#8BC34A]/20 border border-[#8BC34A]/30 text-[#8BC34A] text-xs px-3 py-1 rounded-full mb-4 font-mono">
-            🏟️ Mumbai's #1 Turf Booking Platform
+            🏟️ India's #1 Turf Booking Platform
           </div>
           <h1 className="text-4xl font-bold mb-4 leading-tight">
-            Book Mumbai's Best
+            Book India's Best
             <span className="text-[#8BC34A]"> Turfs </span>
             Instantly
           </h1>
@@ -234,7 +234,7 @@ export default function BookPage() {
           BookMyTurfs
         </div>
         <p className="text-[#5C7066] text-xs">
-          Mumbai's premier turf booking platform · bookmyturfs.com
+          India's premier turf booking platform · bookmyturfs.com
         </p>
         <p className="text-[#5C7066] text-xs mt-1">
           Are you a turf owner?{" "}
