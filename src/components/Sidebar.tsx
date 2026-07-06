@@ -1,13 +1,14 @@
 "use client";
-import { LayoutGrid, CalendarDays, Receipt, Wallet } from "lucide-react";
+import { LayoutGrid, CalendarDays, Receipt, Wallet, Tag } from "lucide-react";
 
-export type Tab = "dashboard" | "calendar" | "bookings" | "payouts";
+export type Tab = "dashboard" | "calendar" | "bookings" | "payouts" | "promos";
 
 const NAV_ITEMS: { id: Tab; label: string; icon: typeof LayoutGrid }[] = [
   { id: "dashboard", label: "Dashboard", icon: LayoutGrid },
   { id: "calendar", label: "Slot Calendar", icon: CalendarDays },
   { id: "bookings", label: "Bookings", icon: Receipt },
   { id: "payouts", label: "Payouts", icon: Wallet },
+  { id: "promos", label: "Promos", icon: Tag },
 ];
 
 export default function Sidebar({
@@ -36,7 +37,7 @@ export default function Sidebar({
         ))}
       </nav>
       <div className="px-6 py-4 border-t border-[#1E3324] text-xs text-[#5C7066]">
-        {venues.length} venues live · Mumbai
+        {venues.length} venues live
       </div>
     </aside>
   );
