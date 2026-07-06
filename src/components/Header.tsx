@@ -8,6 +8,7 @@ const TITLES: Record<Tab, string> = {
   calendar: "Slot Calendar",
   bookings: "Bookings",
   payouts: "Payouts",
+  promos: "Promos",
 };
 
 export default function Header({
