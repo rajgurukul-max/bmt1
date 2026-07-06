@@ -11,13 +11,17 @@ declare global {
   }
 }
 
+function formatHour(h: number) {
+  return `${h % 12 === 0 ? 12 : h % 12}:00 ${h < 12 ? "AM" : "PM"}`;
+}
+
 export default function VenuePage({ params }: { params: { id: string } }) {
   const [venue, setVenue] = useState<any>(null);
   const [slots, setSlots] = useState<any[]>([]);
   const [selectedDate, setSelectedDate] = useState(
     new Date().toISOString().split("T")[0]
   );
-  const [selectedSlot, setSelectedSlot] = useState<number | null>(null);
+  const [selectedSlots, setSelectedSlots] = useState<number[]>([]);
   const [booking, setBooking] = useState({ name: "", phone: "", players: "" });
   const [loading, setLoading] = useState(true);
   const [paying, setPaying] = useState(false);
@@ -30,7 +34,6 @@ export default function VenuePage({ params }: { params: { id: string } }) {
   });
 
   useEffect(() => {
-    // Load Razorpay script
     const script = document.createElement("script");
     script.src = "https://checkout.razorpay.com/v1/checkout.js";
     script.async = true;
@@ -57,81 +60,99 @@ export default function VenuePage({ params }: { params: { id: string } }) {
     return slot ? slot.status : "open";
   };
 
+  const toggleSlot = (h: number) => {
+    setSelectedSlots((prev) =>
+      prev.includes(h) ? prev.filter((x) => x !== h) : [...prev, h].sort((a, b) => a - b)
+    );
+  };
+
+  const totalAmount = selectedSlots.length * Number(venue?.price_per_hour || 0);
+
   const handlePayment = async () => {
-  if (!selectedSlot || !booking.name || !booking.phone) return;
-  setPaying(true);
+    if (selectedSlots.length === 0 || !booking.name || !booking.phone) return;
+    setPaying(true);
 
-  try {
-    // Step 1 — Create booking first with pending status
-    const bookingRes = await fetch("/api/public/bookings", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-  venue_id: params.id,
-  hour: Number(selectedSlot),
-  date: selectedDate,
-  player_name: String(booking.name),
-  player_phone: String(booking.phone),
-  players: Number(booking.players) || 1,
-  amount: Number(venue?.price_per_hour),
-  status: "pending",
-  payment_id: "",
-  booking_date: selectedDate,
-}),
- });
-    const bookingData = await bookingRes.json();
-    const bookingId = bookingData?.[0]?.id;
+    try {
+      // Step 1 — Create a booking row per selected hour, tagged with a shared group id
+      const bookingGroupId = crypto.randomUUID();
 
-    // Step 2 — Create Razorpay order
-    const orderRes = await fetch("/api/payment/create-order", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        amount: venue?.price_per_hour,
-        venue_name: venue?.name,
-        booking_id: bookingId,
-      }),
-    });
-    const order = await orderRes.json();
+      const bookingResults = await Promise.all(
+        selectedSlots.map((hour) =>
+          fetch("/api/public/bookings", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              venue_id: params.id,
+              hour,
+              date: selectedDate,
+              player_name: String(booking.name),
+              player_phone: String(booking.phone),
+              players: Number(booking.players) || 1,
+              amount: Number(venue?.price_per_hour),
+              status: "pending",
+              payment_id: "",
+              booking_date: selectedDate,
+              booking_group_id: bookingGroupId,
+            }),
+          }).then((r) => r.json())
+        )
+      );
 
-    // Step 3 — Open Razorpay
-    const options = {
-      key: process.env.NEXT_PUBLIC_RAZORPAY_KEY_ID,
-      amount: order.amount,
-      currency: "INR",
-      name: "BookMyTurfs",
-      description: `${venue?.name} - ${selectedSlot}:00 ${selectedSlot < 12 ? "AM" : "PM"}`,
-      order_id: order.id,
-      prefill: {
-        name: booking.name,
-        contact: booking.phone,
-      },
-      theme: { color: "#8BC34A" },
-      handler: async (response: any) => {
-        // Card payment success
-        await fetch(`/api/payment/confirm`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            booking_id: bookingId,
-            payment_id: response.razorpay_payment_id,
-          }),
-        });
-        setBooked(true);
-      },
-      modal: {
-        ondismiss: () => setPaying(false),
-      },
-    };
+      const bookingIds = bookingResults.map((b) => b?.[0]?.id).filter(Boolean);
 
-    const rzp = new window.Razorpay(options);
-    rzp.open();
-  } catch (e) {
-    alert("Something went wrong. Please try again.");
-    setPaying(false);
-  }
-};
+      // Step 2 — Create one Razorpay order for the combined total
+      const orderRes = await fetch("/api/payment/create-order", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          amount: totalAmount,
+          venue_name: venue?.name,
+          booking_id: bookingGroupId,
+        }),
+      });
+      const order = await orderRes.json();
 
+      // Step 3 — Open Razorpay
+      const slotSummary = selectedSlots.map(formatHour).join(", ");
+      const options = {
+        key: process.env.NEXT_PUBLIC_RAZORPAY_KEY_ID,
+        amount: order.amount,
+        currency: "INR",
+        name: "BookMyTurfs",
+        description: `${venue?.name} - ${slotSummary}`,
+        order_id: order.id,
+        prefill: {
+          name: booking.name,
+          contact: booking.phone,
+        },
+        theme: { color: "#8BC34A" },
+        handler: async (response: any) => {
+          await Promise.all(
+            bookingIds.map((bookingId) =>
+              fetch(`/api/payment/confirm`, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                  booking_id: bookingId,
+                  payment_id: response.razorpay_payment_id,
+                }),
+              })
+            )
+          );
+          setBooked(true);
+        },
+        modal: {
+          ondismiss: () => setPaying(false),
+        },
+      };
+
+      const rzp = new window.Razorpay(options);
+      rzp.open();
+    } catch (e) {
+      alert("Something went wrong. Please try again.");
+      setPaying(false);
+    }
+  };
 
   if (loading) {
     return (
@@ -151,8 +172,7 @@ export default function VenuePage({ params }: { params: { id: string } }) {
           </h1>
           <p className="text-[#9FB0A3] mb-2">{venue?.name}</p>
           <p className="text-[#8BC34A] font-mono mb-2">
-            {selectedDate} at {selectedSlot}:00{" "}
-            {selectedSlot! < 12 ? "AM" : "PM"}
+            {selectedDate} · {selectedSlots.map(formatHour).join(", ")}
           </p>
           <p className="text-[#9FB0A3] text-sm mb-6">
             Payment successful! See you at the turf. 🏏
@@ -207,7 +227,7 @@ export default function VenuePage({ params }: { params: { id: string } }) {
                   key={dateStr}
                   onClick={() => {
                     setSelectedDate(dateStr);
-                    setSelectedSlot(null);
+                    setSelectedSlots([]);
                   }}
                   className={`px-3 py-2 rounded-lg text-xs font-mono border transition-colors ${
                     selectedDate === dateStr
@@ -228,18 +248,28 @@ export default function VenuePage({ params }: { params: { id: string } }) {
 
         {/* Slot selector */}
         <div className="mb-6">
-          <h2 className="text-sm font-medium text-[#9FB0A3] uppercase tracking-wide mb-3">
-            Select Time Slot
-          </h2>
+          <div className="flex items-center justify-between mb-3">
+            <h2 className="text-sm font-medium text-[#9FB0A3] uppercase tracking-wide">
+              Select Time Slot(s)
+            </h2>
+            {selectedSlots.length > 0 && (
+              <span className="text-xs text-[#8BC34A]">
+                {selectedSlots.length} selected
+              </span>
+            )}
+          </div>
+          <p className="text-xs text-[#5C7066] mb-3">
+            Tap multiple hours to book them together — even non-consecutive ones.
+          </p>
           <div className="grid grid-cols-4 gap-2">
             {HOURS.map((h) => {
               const status = getSlotStatus(h);
-              const isSelected = selectedSlot === h;
+              const isSelected = selectedSlots.includes(h);
               return (
                 <button
                   key={h}
                   disabled={status === "blocked" || status === "booked"}
-                  onClick={() => setSelectedSlot(h)}
+                  onClick={() => toggleSlot(h)}
                   className={`py-2.5 rounded-lg text-xs font-mono border transition-colors ${
                     status === "blocked" || status === "booked"
                       ? "bg-[#E5484D]/20 border-[#E5484D]/30 text-[#E5484D]/50 cursor-not-allowed"
@@ -248,8 +278,7 @@ export default function VenuePage({ params }: { params: { id: string } }) {
                       : "bg-[#16291C] border-[#2C4A33] text-[#8BC34A] hover:border-[#8BC34A]"
                   }`}
                 >
-                  {h % 12 === 0 ? 12 : h % 12}:00{" "}
-                  {h < 12 ? "AM" : "PM"}
+                  {formatHour(h)}
                 </button>
               );
             })}
@@ -257,12 +286,14 @@ export default function VenuePage({ params }: { params: { id: string } }) {
         </div>
 
         {/* Booking form */}
-        {selectedSlot && (
+        {selectedSlots.length > 0 && (
           <div className="bg-[#16291C] border border-[#1E3324] rounded-xl p-5">
-            <h2 className="font-medium mb-4">
-              Booking for {selectedSlot % 12 === 0 ? 12 : selectedSlot % 12}
-              :00 {selectedSlot < 12 ? "AM" : "PM"}
+            <h2 className="font-medium mb-1">
+              Booking {selectedSlots.length} slot{selectedSlots.length > 1 ? "s" : ""}
             </h2>
+            <p className="text-xs text-[#9FB0A3] mb-4">
+              {selectedSlots.map(formatHour).join(" · ")}
+            </p>
             <div className="space-y-3 mb-4">
               <input
                 value={booking.name}
@@ -292,9 +323,11 @@ export default function VenuePage({ params }: { params: { id: string } }) {
               />
             </div>
             <div className="flex items-center justify-between mb-4">
-              <span className="text-sm text-[#9FB0A3]">Total amount</span>
+              <span className="text-sm text-[#9FB0A3]">
+                Total amount ({selectedSlots.length} × ₹{venue?.price_per_hour?.toLocaleString("en-IN")})
+              </span>
               <span className="font-mono font-semibold text-[#8BC34A]">
-                ₹{venue?.price_per_hour?.toLocaleString("en-IN")}
+                ₹{totalAmount.toLocaleString("en-IN")}
               </span>
             </div>
             <button
@@ -302,7 +335,7 @@ export default function VenuePage({ params }: { params: { id: string } }) {
               disabled={paying || !booking.name || !booking.phone}
               className="w-full bg-[#8BC34A] text-[#0E1F14] font-medium py-3 rounded-lg hover:bg-[#9BCF5E] transition-colors disabled:opacity-50"
             >
-              {paying ? "Processing..." : `Pay ₹${venue?.price_per_hour?.toLocaleString("en-IN")}`}
+              {paying ? "Processing..." : `Pay ₹${totalAmount.toLocaleString("en-IN")}`}
             </button>
           </div>
         )}
