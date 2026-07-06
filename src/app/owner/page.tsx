@@ -8,6 +8,7 @@ import StatCard from "@/components/StatCard";
 import BookingList from "@/components/BookingList";
 import SlotCalendar from "@/components/SlotCalendar";
 import PayoutsPanel from "@/components/PayoutsPanel";
+import PromosPanel from "@/components/PromosPanel";
 import AddVenueModal from "@/components/AddVenueModal";
 import { HOURS, getNextDays, SlotStatus } from "@/lib/data";
 import { getSupabaseAuth } from "@/lib/auth";
@@ -202,6 +203,7 @@ useEffect(() => {
             </div>
           )}
           {tab === "payouts" && <PayoutsPanel />}
+          {tab === "promos" && <PromosPanel />}
         </div>
       </main>
       {showAddVenue && (
