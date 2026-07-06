@@ -45,6 +45,8 @@ export async function POST(req: Request) {
         payment_id: body.payment_id || "",
         booking_date: body.booking_date,
         hour: body.hour,
+        booking_group_id: body.booking_group_id || null,
+        
       }),
     });
     const bookingData = await bookingRes.json();
