@@ -53,9 +53,28 @@ export async function POST(req: Request) {
 
 export async function PATCH(req: Request) {
   const body = await req.json();
-  const { id, is_active } = body;
+  const { id, is_active, increment_use } = body;
 
   if (!id) return NextResponse.json({ error: "Missing id" }, { status: 400 });
+
+  if (increment_use) {
+    const { data: current, error: fetchError } = await supabase
+      .from("promo_codes")
+      .select("used_count")
+      .eq("id", id)
+      .single();
+
+    if (fetchError) return NextResponse.json({ error: fetchError.message }, { status: 500 });
+
+    const { data, error } = await supabase
+      .from("promo_codes")
+      .update({ used_count: (current?.used_count || 0) + 1 })
+      .eq("id", id)
+      .select();
+
+    if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+    return NextResponse.json(data);
+  }
 
   const { data, error } = await supabase
     .from("promo_codes")
@@ -66,4 +85,3 @@ export async function PATCH(req: Request) {
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
   return NextResponse.json(data);
 }
-
