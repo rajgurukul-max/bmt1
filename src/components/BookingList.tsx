@@ -8,7 +8,7 @@ export default function BookingList({ bookings }: { bookings: any[] }) {
     return acc;
   }, {} as Record<string, any[]>);
 
-  const groupedBookings = Object.values(groups).map((rows) => {
+    const groupedBookings = (Object.values(groups) as any[][]).map((rows) => {
     const first = rows[0];
     const hours = rows.map((r) => r.hour).sort((a, b) => a - b);
     const totalAmount = rows.reduce((sum, r) => sum + (r.amount || 0), 0);
