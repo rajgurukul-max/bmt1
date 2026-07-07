@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { MapPin, IndianRupee, ArrowLeft } from "lucide-react";
+import { MapPin, IndianRupee, ArrowLeft, Tag, X } from "lucide-react";
 
 const HOURS = Array.from({ length: 14 }, (_, i) => 6 + i);
 
@@ -26,6 +26,11 @@ export default function VenuePage({ params }: { params: { id: string } }) {
   const [loading, setLoading] = useState(true);
   const [paying, setPaying] = useState(false);
   const [booked, setBooked] = useState(false);
+
+  const [promoInput, setPromoInput] = useState("");
+  const [promoApplied, setPromoApplied] = useState<any>(null);
+  const [promoError, setPromoError] = useState("");
+  const [checkingPromo, setCheckingPromo] = useState(false);
 
   const DAYS = Array.from({ length: 5 }, (_, i) => {
     const d = new Date();
@@ -68,13 +73,68 @@ export default function VenuePage({ params }: { params: { id: string } }) {
 
   const totalAmount = selectedSlots.length * Number(venue?.price_per_hour || 0);
 
+  // Re-validate the applied promo whenever the total changes (e.g. slots added/removed)
+  useEffect(() => {
+    if (promoApplied && promoApplied.min_amount && totalAmount < promoApplied.min_amount) {
+      setPromoApplied(null);
+      setPromoError(`This code needs a minimum order of ₹${promoApplied.min_amount}`);
+    }
+  }, [totalAmount]);
+
+  const applyPromo = async () => {
+    if (!promoInput.trim()) return;
+    setCheckingPromo(true);
+    setPromoError("");
+    try {
+      const res = await fetch("/api/promos");
+      const data = await res.json();
+      const match = Array.isArray(data)
+        ? data.find((p: any) => p.code === promoInput.trim().toUpperCase())
+        : null;
+
+      if (!match) {
+        setPromoError("Invalid promo code");
+      } else if (!match.is_active) {
+        setPromoError("This promo code is no longer active");
+      } else if (match.expires_at && new Date(match.expires_at) < new Date()) {
+        setPromoError("This promo code has expired");
+      } else if (match.max_uses && match.used_count >= match.max_uses) {
+        setPromoError("This promo code has reached its usage limit");
+      } else if (match.min_amount && totalAmount < match.min_amount) {
+        setPromoError(`Minimum order amount is ₹${match.min_amount}`);
+      } else {
+        setPromoApplied(match);
+        setPromoError("");
+      }
+    } catch (e) {
+      setPromoError("Could not validate promo code right now");
+    }
+    setCheckingPromo(false);
+  };
+
+  const removePromo = () => {
+    setPromoApplied(null);
+    setPromoInput("");
+    setPromoError("");
+  };
+
+  const discountAmount = promoApplied
+    ? promoApplied.discount_type === "percent"
+      ? Math.round((totalAmount * Number(promoApplied.discount_value)) / 100)
+      : Math.min(Number(promoApplied.discount_value), totalAmount)
+    : 0;
+
+  const finalAmount = totalAmount - discountAmount;
+
   const handlePayment = async () => {
     if (selectedSlots.length === 0 || !booking.name || !booking.phone) return;
     setPaying(true);
 
     try {
-      // Step 1 — Create a booking row per selected hour, tagged with a shared group id
       const bookingGroupId = crypto.randomUUID();
+      const perSlotDiscount = selectedSlots.length
+        ? Math.round(discountAmount / selectedSlots.length)
+        : 0;
 
       const bookingResults = await Promise.all(
         selectedSlots.map((hour) =>
@@ -88,11 +148,14 @@ export default function VenuePage({ params }: { params: { id: string } }) {
               player_name: String(booking.name),
               player_phone: String(booking.phone),
               players: Number(booking.players) || 1,
-              amount: Number(venue?.price_per_hour),
+              amount: Number(venue?.price_per_hour) - perSlotDiscount,
               status: "pending",
               payment_id: "",
               booking_date: selectedDate,
               booking_group_id: bookingGroupId,
+              promo_code: promoApplied?.code || null,
+              discount_applied: perSlotDiscount,
+              discount_type: promoApplied ? "promo" : null,
             }),
           }).then((r) => r.json())
         )
@@ -100,19 +163,17 @@ export default function VenuePage({ params }: { params: { id: string } }) {
 
       const bookingIds = bookingResults.map((b) => b?.[0]?.id).filter(Boolean);
 
-      // Step 2 — Create one Razorpay order for the combined total
       const orderRes = await fetch("/api/payment/create-order", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          amount: totalAmount,
+          amount: finalAmount,
           venue_name: venue?.name,
           booking_id: bookingGroupId,
         }),
       });
       const order = await orderRes.json();
 
-      // Step 3 — Open Razorpay
       const slotSummary = selectedSlots.map(formatHour).join(", ");
       const options = {
         key: process.env.NEXT_PUBLIC_RAZORPAY_KEY_ID,
@@ -139,6 +200,15 @@ export default function VenuePage({ params }: { params: { id: string } }) {
               })
             )
           );
+
+          if (promoApplied?.id) {
+            fetch("/api/promos", {
+              method: "PATCH",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ id: promoApplied.id, increment_use: true }),
+            }).catch(() => {});
+          }
+
           setBooked(true);
         },
         modal: {
@@ -322,20 +392,86 @@ export default function VenuePage({ params }: { params: { id: string } }) {
                 className="w-full bg-[#0E1F14] border border-[#2C4A33] rounded-lg px-3 py-2.5 text-sm text-[#F4F7ED] placeholder-[#5C7066] focus:outline-none focus:border-[#8BC34A]"
               />
             </div>
-            <div className="flex items-center justify-between mb-4">
-              <span className="text-sm text-[#9FB0A3]">
-                Total amount ({selectedSlots.length} × ₹{venue?.price_per_hour?.toLocaleString("en-IN")})
-              </span>
-              <span className="font-mono font-semibold text-[#8BC34A]">
-                ₹{totalAmount.toLocaleString("en-IN")}
-              </span>
+
+            {/* Promo code */}
+            <div className="mb-4">
+              {!promoApplied ? (
+                <>
+                  <div className="flex gap-2">
+                    <div className="relative flex-1">
+                      <Tag
+                        size={14}
+                        className="absolute left-3 top-1/2 -translate-y-1/2 text-[#5C7066]"
+                      />
+                      <input
+                        value={promoInput}
+                        onChange={(e) => setPromoInput(e.target.value.toUpperCase())}
+                        placeholder="Have a promo code?"
+                        className="w-full bg-[#0E1F14] border border-[#2C4A33] rounded-lg pl-9 pr-3 py-2.5 text-sm text-[#F4F7ED] placeholder-[#5C7066] focus:outline-none focus:border-[#8BC34A]"
+                      />
+                    </div>
+                    <button
+                      onClick={applyPromo}
+                      disabled={checkingPromo || !promoInput.trim()}
+                      className="px-4 py-2.5 rounded-lg text-sm font-medium border border-[#2C4A33] text-[#8BC34A] hover:border-[#8BC34A] transition-colors disabled:opacity-50"
+                    >
+                      {checkingPromo ? "..." : "Apply"}
+                    </button>
+                  </div>
+                  {promoError && (
+                    <p className="text-[#E5484D] text-xs mt-2">{promoError}</p>
+                  )}
+                </>
+              ) : (
+                <div className="flex items-center justify-between bg-[#8BC34A]/10 border border-[#8BC34A]/30 rounded-lg px-3 py-2.5">
+                  <div className="flex items-center gap-2">
+                    <Tag size={14} className="text-[#8BC34A]" />
+                    <span className="text-sm text-[#8BC34A] font-mono font-semibold">
+                      {promoApplied.code}
+                    </span>
+                    <span className="text-xs text-[#9FB0A3]">
+                      applied — ₹{discountAmount.toLocaleString("en-IN")} off
+                    </span>
+                  </div>
+                  <button onClick={removePromo} className="text-[#9FB0A3] hover:text-[#F4F7ED]">
+                    <X size={16} />
+                  </button>
+                </div>
+              )}
             </div>
+
+            {/* Price breakdown */}
+            <div className="space-y-1.5 mb-4">
+              <div className="flex items-center justify-between text-sm">
+                <span className="text-[#9FB0A3]">
+                  Subtotal ({selectedSlots.length} × ₹{venue?.price_per_hour?.toLocaleString("en-IN")})
+                </span>
+                <span className="font-mono text-[#F4F7ED]">
+                  ₹{totalAmount.toLocaleString("en-IN")}
+                </span>
+              </div>
+              {promoApplied && (
+                <div className="flex items-center justify-between text-sm">
+                  <span className="text-[#8BC34A]">Promo discount</span>
+                  <span className="font-mono text-[#8BC34A]">
+                    −₹{discountAmount.toLocaleString("en-IN")}
+                  </span>
+                </div>
+              )}
+              <div className="flex items-center justify-between pt-1.5 border-t border-[#1E3324]">
+                <span className="text-sm font-medium text-[#F4F7ED]">Total amount</span>
+                <span className="font-mono font-semibold text-[#8BC34A]">
+                  ₹{finalAmount.toLocaleString("en-IN")}
+                </span>
+              </div>
+            </div>
+
             <button
               onClick={handlePayment}
               disabled={paying || !booking.name || !booking.phone}
               className="w-full bg-[#8BC34A] text-[#0E1F14] font-medium py-3 rounded-lg hover:bg-[#9BCF5E] transition-colors disabled:opacity-50"
             >
-              {paying ? "Processing..." : `Pay ₹${totalAmount.toLocaleString("en-IN")}`}
+              {paying ? "Processing..." : `Pay ₹${finalAmount.toLocaleString("en-IN")}`}
             </button>
           </div>
         )}
