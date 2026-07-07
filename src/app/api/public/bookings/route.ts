@@ -46,7 +46,9 @@ export async function POST(req: Request) {
         booking_date: body.booking_date,
         hour: body.hour,
         booking_group_id: body.booking_group_id || null,
-        
+        promo_code: body.promo_code || null,
+        discount_applied: body.discount_applied || 0,
+        discount_type: body.discount_type || null,
       }),
     });
     const bookingData = await bookingRes.json();
