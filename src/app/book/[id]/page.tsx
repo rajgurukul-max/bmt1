@@ -1,9 +1,12 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, useMemo } from "react";
 import { MapPin, IndianRupee, ArrowLeft, Tag, X } from "lucide-react";
 
 const HOURS = Array.from({ length: 14 }, (_, i) => 6 + i);
+
+// Easy to tweak later — no other code needs to change
+const STRETCH_DISCOUNT = { minHours: 3, percentOff: 10 };
 
 declare global {
   interface Window {
@@ -13,6 +16,23 @@ declare global {
 
 function formatHour(h: number) {
   return `${h % 12 === 0 ? 12 : h % 12}:00 ${h < 12 ? "AM" : "PM"}`;
+}
+
+function getContiguousRuns(hours: number[]): number[][] {
+  if (!hours.length) return [];
+  const sorted = [...hours].sort((a, b) => a - b);
+  const runs: number[][] = [];
+  let current: number[] = [sorted[0]];
+  for (let i = 1; i < sorted.length; i++) {
+    if (sorted[i] === sorted[i - 1] + 1) {
+      current.push(sorted[i]);
+    } else {
+      runs.push(current);
+      current = [sorted[i]];
+    }
+  }
+  runs.push(current);
+  return runs;
 }
 
 export default function VenuePage({ params }: { params: { id: string } }) {
@@ -73,6 +93,23 @@ export default function VenuePage({ params }: { params: { id: string } }) {
 
   const totalAmount = selectedSlots.length * Number(venue?.price_per_hour || 0);
 
+  // Stretch discount — only contiguous runs meeting the minimum qualify
+  const stretchDiscount = useMemo(() => {
+    const runs = getContiguousRuns(selectedSlots);
+    let discount = 0;
+    for (const run of runs) {
+      if (run.length >= STRETCH_DISCOUNT.minHours) {
+        const runAmount = run.length * Number(venue?.price_per_hour || 0);
+        discount += Math.round((runAmount * STRETCH_DISCOUNT.percentOff) / 100);
+      }
+    }
+    return discount;
+  }, [selectedSlots, venue]);
+
+  const hasQualifyingStretch = getContiguousRuns(selectedSlots).some(
+    (run) => run.length >= STRETCH_DISCOUNT.minHours
+  );
+
   // Re-validate the applied promo whenever the total changes (e.g. slots added/removed)
   useEffect(() => {
     if (promoApplied && promoApplied.min_amount && totalAmount < promoApplied.min_amount) {
@@ -118,11 +155,16 @@ export default function VenuePage({ params }: { params: { id: string } }) {
     setPromoError("");
   };
 
-  const discountAmount = promoApplied
+  const promoDiscountAmount = promoApplied
     ? promoApplied.discount_type === "percent"
       ? Math.round((totalAmount * Number(promoApplied.discount_value)) / 100)
       : Math.min(Number(promoApplied.discount_value), totalAmount)
     : 0;
+
+  // No stacking — whichever discount is bigger is the one that applies
+  const usingStretch = stretchDiscount >= promoDiscountAmount;
+  const discountAmount = Math.max(stretchDiscount, promoDiscountAmount);
+  const discountSource = discountAmount === 0 ? null : usingStretch ? "stretch" : "promo";
 
   const finalAmount = totalAmount - discountAmount;
 
@@ -153,9 +195,9 @@ export default function VenuePage({ params }: { params: { id: string } }) {
               payment_id: "",
               booking_date: selectedDate,
               booking_group_id: bookingGroupId,
-              promo_code: promoApplied?.code || null,
+              promo_code: discountSource === "promo" ? promoApplied?.code : null,
               discount_applied: perSlotDiscount,
-              discount_type: promoApplied ? "promo" : null,
+              discount_type: discountSource,
             }),
           }).then((r) => r.json())
         )
@@ -201,7 +243,8 @@ export default function VenuePage({ params }: { params: { id: string } }) {
             )
           );
 
-          if (promoApplied?.id) {
+          // Only count the promo code as "used" if it was actually the better discount
+          if (discountSource === "promo" && promoApplied?.id) {
             fetch("/api/promos", {
               method: "PATCH",
               headers: { "Content-Type": "application/json" },
@@ -330,6 +373,8 @@ export default function VenuePage({ params }: { params: { id: string } }) {
           </div>
           <p className="text-xs text-[#5C7066] mb-3">
             Tap multiple hours to book them together — even non-consecutive ones.
+            Book {STRETCH_DISCOUNT.minHours}+ hours in a row for an automatic{" "}
+            {STRETCH_DISCOUNT.percentOff}% discount.
           </p>
           <div className="grid grid-cols-4 gap-2">
             {HOURS.map((h) => {
@@ -353,6 +398,11 @@ export default function VenuePage({ params }: { params: { id: string } }) {
               );
             })}
           </div>
+          {hasQualifyingStretch && (
+            <p className="text-xs text-[#8BC34A] mt-2">
+              🎉 You've got a {STRETCH_DISCOUNT.minHours}+ hour stretch — discount applied automatically below.
+            </p>
+          )}
         </div>
 
         {/* Booking form */}
@@ -430,7 +480,9 @@ export default function VenuePage({ params }: { params: { id: string } }) {
                       {promoApplied.code}
                     </span>
                     <span className="text-xs text-[#9FB0A3]">
-                      applied — ₹{discountAmount.toLocaleString("en-IN")} off
+                      {discountSource === "promo"
+                        ? `applied — ₹${discountAmount.toLocaleString("en-IN")} off`
+                        : "your stretch discount is already better, so this isn't needed"}
                     </span>
                   </div>
                   <button onClick={removePromo} className="text-[#9FB0A3] hover:text-[#F4F7ED]">
@@ -450,9 +502,11 @@ export default function VenuePage({ params }: { params: { id: string } }) {
                   ₹{totalAmount.toLocaleString("en-IN")}
                 </span>
               </div>
-              {promoApplied && (
+              {discountAmount > 0 && (
                 <div className="flex items-center justify-between text-sm">
-                  <span className="text-[#8BC34A]">Promo discount</span>
+                  <span className="text-[#8BC34A]">
+                    {discountSource === "stretch" ? "Stretch discount" : "Promo discount"}
+                  </span>
                   <span className="font-mono text-[#8BC34A]">
                     −₹{discountAmount.toLocaleString("en-IN")}
                   </span>
