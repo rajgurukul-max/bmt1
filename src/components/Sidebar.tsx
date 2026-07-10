@@ -23,9 +23,12 @@ export default function Sidebar({
   return (
     <aside className="w-60 shrink-0 border-r border-[#1E3324] flex flex-col">
       <div className="px-6 py-6 border-b border-[#1E3324]">
-        <div className="font-mono text-[#8BC34A] text-xs tracking-[0.2em] uppercase">BookMyTurfs</div>
-        <div className="text-sm text-[#9FB0A3] mt-1">Owner Console</div>
-      </div>
+  <div className="flex items-center gap-2">
+    <img src="/logo.png" alt="BookMyTurfs" className="w-6 h-6" />
+    <div className="font-mono text-[#8BC34A] text-xs tracking-[0.2em] uppercase">BookMyTurfs</div>
+  </div>
+  <div className="text-sm text-[#9FB0A3] mt-1">Owner Console</div>
+</div>
       <nav className="flex-1 px-3 py-4 space-y-1">
         {NAV_ITEMS.map(({ id, label, icon: Icon }) => (
           <button key={id} onClick={() => onChange(id)}
