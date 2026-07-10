@@ -53,9 +53,12 @@ export default function BookPage() {
     <div className="min-h-screen bg-[#0E1F14] text-[#F4F7ED]">
       {/* Navbar */}
       <nav className="border-b border-[#1E3324] px-6 py-4 flex items-center justify-between">
-        <div className="font-mono text-[#8BC34A] text-sm tracking-[0.2em] uppercase font-bold">
-          BookMyTurfs
-        </div>
+        <div className="flex items-center gap-2">
+  <img src="/logo.png" alt="BookMyTurfs" className="w-6 h-6" />
+  <div className="font-mono text-[#8BC34A] text-sm tracking-[0.2em] uppercase font-bold">
+    BookMyTurfs
+  </div>
+</div>
         <a
           href="/owner/login"
           className="text-xs text-[#9FB0A3] hover:text-[#8BC34A] transition-colors border border-[#2C4A33] px-3 py-1.5 rounded-md hover:border-[#8BC34A]"
