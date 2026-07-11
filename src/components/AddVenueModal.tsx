@@ -1,6 +1,6 @@
 "use client";
 import { useState } from "react";
-import { X } from "lucide-react";
+import { X, ImagePlus } from "lucide-react";
 
 const SPORTS = [
   "Football", "Cricket", "Box Cricket", "Badminton", "Tennis",
@@ -34,6 +34,8 @@ const CITIES = [
   "Panaji", "Puducherry"
 ];
 
+const MAX_PHOTOS = 3;
+
 export default function AddVenueModal({
   onClose,
   onSave,
@@ -58,9 +60,52 @@ export default function AddVenueModal({
   const [error, setError] = useState("");
   const [showComplexSuggestions, setShowComplexSuggestions] = useState(false);
 
+  const [photoFiles, setPhotoFiles] = useState<File[]>([]);
+  const [photoPreviews, setPhotoPreviews] = useState<string[]>([]);
+  const [uploadingPhotos, setUploadingPhotos] = useState(false);
+
   const filteredComplexNames = existingComplexNames.filter(c =>
     c.toLowerCase().includes(form.complex_name.toLowerCase())
   );
+
+  const handlePhotoSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = Array.from(e.target.files || []);
+    const remaining = MAX_PHOTOS - photoFiles.length;
+    const toAdd = files.slice(0, remaining);
+    if (toAdd.length === 0) return;
+
+    setPhotoFiles(prev => [...prev, ...toAdd]);
+    const newPreviews = toAdd.map(f => URL.createObjectURL(f));
+    setPhotoPreviews(prev => [...prev, ...newPreviews]);
+    e.target.value = "";
+  };
+
+  const removePhoto = (index: number) => {
+    setPhotoFiles(prev => prev.filter((_, i) => i !== index));
+    setPhotoPreviews(prev => prev.filter((_, i) => i !== index));
+  };
+
+  const uploadPhotos = async (supabase: any): Promise<string[]> => {
+    if (photoFiles.length === 0) return [];
+    setUploadingPhotos(true);
+    const urls: string[] = [];
+    try {
+      for (let i = 0; i < photoFiles.length; i++) {
+        const file = photoFiles[i];
+        const ext = file.name.split(".").pop();
+        const path = `${Date.now()}-${i}.${ext}`;
+        const { error: uploadError } = await supabase.storage
+          .from("venue-photos")
+          .upload(path, file);
+        if (uploadError) throw uploadError;
+        const { data } = supabase.storage.from("venue-photos").getPublicUrl(path);
+        urls.push(data.publicUrl);
+      }
+    } finally {
+      setUploadingPhotos(false);
+    }
+    return urls;
+  };
 
   const handleSave = async () => {
     if (!form.name || !form.city || !form.area || !form.sport_type || !form.price_per_hour) {
@@ -75,6 +120,15 @@ export default function AddVenueModal({
       const { data: sessionData } = await supabase.auth.getSession();
       const token = sessionData?.session?.access_token;
       const userId = sessionData?.session?.user?.id;
+
+      let photoUrls: string[] = [];
+      try {
+        photoUrls = await uploadPhotos(supabase);
+      } catch (e) {
+        setError("Failed to upload photos — venue not saved. Try again.");
+        setLoading(false);
+        return;
+      }
 
       const res = await fetch("/api/venues", {
         method: "POST",
@@ -95,6 +149,7 @@ export default function AddVenueModal({
           description: form.description,
           is_active: true,
           owner_id: userId,
+          photos: photoUrls,
         }),
       });
       const data = await res.json();
@@ -121,6 +176,39 @@ export default function AddVenueModal({
         </div>
 
         <div className="px-6 py-4 space-y-4">
+
+          {/* Photos */}
+          <div>
+            <label className="block text-xs text-[#9FB0A3] mb-1">
+              Photos <span className="text-[#5C7066]">(optional — up to {MAX_PHOTOS}, real photos build trust)</span>
+            </label>
+            <div className="flex gap-2 flex-wrap">
+              {photoPreviews.map((src, i) => (
+                <div key={i} className="relative w-20 h-20 rounded-lg overflow-hidden border border-[#2C4A33]">
+                  <img src={src} alt={`Photo ${i + 1}`} className="w-full h-full object-cover" />
+                  <button
+                    onClick={() => removePhoto(i)}
+                    className="absolute top-0.5 right-0.5 bg-black/60 rounded-full p-0.5 text-white hover:bg-black/80"
+                  >
+                    <X size={12} />
+                  </button>
+                </div>
+              ))}
+              {photoFiles.length < MAX_PHOTOS && (
+                <label className="w-20 h-20 rounded-lg border border-dashed border-[#2C4A33] flex flex-col items-center justify-center text-[#5C7066] hover:border-[#8BC34A] hover:text-[#8BC34A] cursor-pointer transition-colors">
+                  <ImagePlus size={18} />
+                  <span className="text-[9px] mt-1">Add</span>
+                  <input
+                    type="file"
+                    accept="image/*"
+                    multiple
+                    className="hidden"
+                    onChange={handlePhotoSelect}
+                  />
+                </label>
+              )}
+            </div>
+          </div>
 
           {/* Complex Name */}
           <div className="relative">
@@ -277,7 +365,7 @@ export default function AddVenueModal({
               disabled={loading}
               className="flex-1 bg-[#8BC34A] text-[#0E1F14] py-2.5 rounded-lg text-sm font-medium hover:bg-[#9BCF5E] transition-colors disabled:opacity-50"
             >
-              {loading ? "Saving..." : "Save Venue"}
+              {loading ? (uploadingPhotos ? "Uploading photos..." : "Saving...") : "Save Venue"}
             </button>
           </div>
         </div>
