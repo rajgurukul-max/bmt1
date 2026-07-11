@@ -9,6 +9,7 @@ const TITLES: Record<Tab, string> = {
   bookings: "Bookings",
   payouts: "Payouts",
   promos: "Promos",
+  venues: "Venues"
 };
 
 export default function Header({
