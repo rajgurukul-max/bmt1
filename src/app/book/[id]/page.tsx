@@ -46,6 +46,7 @@ export default function VenuePage({ params }: { params: { id: string } }) {
   const [loading, setLoading] = useState(true);
   const [paying, setPaying] = useState(false);
   const [booked, setBooked] = useState(false);
+  const [activePhoto, setActivePhoto] = useState(0);
 
   const [promoInput, setPromoInput] = useState("");
   const [promoApplied, setPromoApplied] = useState<any>(null);
@@ -301,6 +302,8 @@ export default function VenuePage({ params }: { params: { id: string } }) {
     );
   }
 
+  const photos: string[] = venue?.photos || [];
+
   return (
     <div className="min-h-screen bg-[#0E1F14] text-[#F4F7ED]">
       <div className="border-b border-[#1E3324] px-6 py-4 flex items-center gap-3">
@@ -313,6 +316,35 @@ export default function VenuePage({ params }: { params: { id: string } }) {
       </div>
 
       <div className="max-w-2xl mx-auto px-6 py-8">
+
+        {/* Photo gallery */}
+        {photos.length > 0 && (
+          <div className="mb-6">
+            <div className="h-56 rounded-xl overflow-hidden bg-[#16291C]">
+              <img
+                src={photos[activePhoto]}
+                alt={venue?.name}
+                className="w-full h-full object-cover"
+              />
+            </div>
+            {photos.length > 1 && (
+              <div className="flex gap-2 mt-2">
+                {photos.map((src, i) => (
+                  <button
+                    key={i}
+                    onClick={() => setActivePhoto(i)}
+                    className={`w-16 h-16 rounded-lg overflow-hidden border-2 transition-colors ${
+                      activePhoto === i ? "border-[#8BC34A]" : "border-transparent opacity-70"
+                    }`}
+                  >
+                    <img src={src} alt={`${venue?.name} ${i + 1}`} className="w-full h-full object-cover" />
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
+
         <div className="mb-6">
           <h1 className="text-2xl font-bold mb-1">{venue?.name}</h1>
           <div className="flex items-center gap-4 text-sm text-[#9FB0A3]">
