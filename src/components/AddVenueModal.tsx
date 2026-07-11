@@ -40,29 +40,37 @@ export default function AddVenueModal({
   onClose,
   onSave,
   existingComplexNames = [],
+  venue = null,
 }: {
   onClose: () => void;
   onSave: (venue: any) => void;
   existingComplexNames?: string[];
+  venue?: any | null;
 }) {
+  const isEditing = !!venue;
+
   const [form, setForm] = useState({
-    complex_name: "",
-    facility_label: "",
-    name: "",
-    city: "",
-    area: "",
-    sport_type: "",
-    address: "",
-    price_per_hour: "",
-    description: "",
+    complex_name: venue?.complex_name || "",
+    facility_label: venue?.facility_label || "",
+    name: venue?.name || "",
+    city: venue?.city || "",
+    area: venue?.area || "",
+    sport_type: venue?.sport_type || venue?.sport || "",
+    address: venue?.address || "",
+    price_per_hour: venue?.price_per_hour ? String(venue.price_per_hour) : "",
+    description: venue?.description || "",
   });
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [showComplexSuggestions, setShowComplexSuggestions] = useState(false);
 
+  // Existing photos (already uploaded, just URLs) vs newly picked files to upload
+  const [existingPhotos, setExistingPhotos] = useState<string[]>(venue?.photos || []);
   const [photoFiles, setPhotoFiles] = useState<File[]>([]);
   const [photoPreviews, setPhotoPreviews] = useState<string[]>([]);
   const [uploadingPhotos, setUploadingPhotos] = useState(false);
+
+  const totalPhotoCount = existingPhotos.length + photoFiles.length;
 
   const filteredComplexNames = existingComplexNames.filter(c =>
     c.toLowerCase().includes(form.complex_name.toLowerCase())
@@ -70,7 +78,7 @@ export default function AddVenueModal({
 
   const handlePhotoSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = Array.from(e.target.files || []);
-    const remaining = MAX_PHOTOS - photoFiles.length;
+    const remaining = MAX_PHOTOS - totalPhotoCount;
     const toAdd = files.slice(0, remaining);
     if (toAdd.length === 0) return;
 
@@ -80,7 +88,11 @@ export default function AddVenueModal({
     e.target.value = "";
   };
 
-  const removePhoto = (index: number) => {
+  const removeExistingPhoto = (index: number) => {
+    setExistingPhotos(prev => prev.filter((_, i) => i !== index));
+  };
+
+  const removeNewPhoto = (index: number) => {
     setPhotoFiles(prev => prev.filter((_, i) => i !== index));
     setPhotoPreviews(prev => prev.filter((_, i) => i !== index));
   };
@@ -121,36 +133,42 @@ export default function AddVenueModal({
       const token = sessionData?.session?.access_token;
       const userId = sessionData?.session?.user?.id;
 
-      let photoUrls: string[] = [];
+      let newPhotoUrls: string[] = [];
       try {
-        photoUrls = await uploadPhotos(supabase);
+        newPhotoUrls = await uploadPhotos(supabase);
       } catch (e) {
-        setError("Failed to upload photos — venue not saved. Try again.");
+        setError("Failed to upload photos — nothing saved. Try again.");
         setLoading(false);
         return;
       }
 
+      const finalPhotos = [...existingPhotos, ...newPhotoUrls];
+
+      const payload = {
+        name: form.name,
+        city: form.city,
+        area: form.area,
+        sport: form.sport_type,
+        sport_type: form.sport_type,
+        complex_name: form.complex_name || null,
+        facility_label: form.facility_label || null,
+        address: form.address,
+        price_per_hour: parseInt(form.price_per_hour),
+        description: form.description,
+        photos: finalPhotos,
+      };
+
       const res = await fetch("/api/venues", {
-        method: "POST",
+        method: isEditing ? "PATCH" : "POST",
         headers: {
           "Content-Type": "application/json",
           Authorization: `Bearer ${token}`,
         },
-        body: JSON.stringify({
-          name: form.name,
-          city: form.city,
-          area: form.area,
-          sport: form.sport_type,
-          sport_type: form.sport_type,
-          complex_name: form.complex_name || null,
-          facility_label: form.facility_label || null,
-          address: form.address,
-          price_per_hour: parseInt(form.price_per_hour),
-          description: form.description,
-          is_active: true,
-          owner_id: userId,
-          photos: photoUrls,
-        }),
+        body: JSON.stringify(
+          isEditing
+            ? { id: venue.id, ...payload }
+            : { ...payload, is_active: true, owner_id: userId }
+        ),
       });
       const data = await res.json();
       if (data.error) {
@@ -160,7 +178,7 @@ export default function AddVenueModal({
         onClose();
       }
     } catch (e) {
-      setError("Failed to save venue");
+      setError(isEditing ? "Failed to update venue" : "Failed to save venue");
     }
     setLoading(false);
   };
@@ -169,7 +187,9 @@ export default function AddVenueModal({
     <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50 px-4">
       <div className="bg-[#16291C] border border-[#1E3324] rounded-xl w-full max-w-md max-h-[90vh] overflow-y-auto">
         <div className="flex items-center justify-between px-6 py-4 border-b border-[#1E3324]">
-          <h2 className="font-semibold text-[#F4F7ED]">Add New Venue</h2>
+          <h2 className="font-semibold text-[#F4F7ED]">
+            {isEditing ? "Edit Venue" : "Add New Venue"}
+          </h2>
           <button onClick={onClose} className="text-[#9FB0A3] hover:text-[#F4F7ED]">
             <X size={20} />
           </button>
@@ -183,18 +203,29 @@ export default function AddVenueModal({
               Photos <span className="text-[#5C7066]">(optional — up to {MAX_PHOTOS}, real photos build trust)</span>
             </label>
             <div className="flex gap-2 flex-wrap">
-              {photoPreviews.map((src, i) => (
-                <div key={i} className="relative w-20 h-20 rounded-lg overflow-hidden border border-[#2C4A33]">
+              {existingPhotos.map((src, i) => (
+                <div key={`existing-${i}`} className="relative w-20 h-20 rounded-lg overflow-hidden border border-[#2C4A33]">
                   <img src={src} alt={`Photo ${i + 1}`} className="w-full h-full object-cover" />
                   <button
-                    onClick={() => removePhoto(i)}
+                    onClick={() => removeExistingPhoto(i)}
                     className="absolute top-0.5 right-0.5 bg-black/60 rounded-full p-0.5 text-white hover:bg-black/80"
                   >
                     <X size={12} />
                   </button>
                 </div>
               ))}
-              {photoFiles.length < MAX_PHOTOS && (
+              {photoPreviews.map((src, i) => (
+                <div key={`new-${i}`} className="relative w-20 h-20 rounded-lg overflow-hidden border border-[#2C4A33]">
+                  <img src={src} alt={`New photo ${i + 1}`} className="w-full h-full object-cover" />
+                  <button
+                    onClick={() => removeNewPhoto(i)}
+                    className="absolute top-0.5 right-0.5 bg-black/60 rounded-full p-0.5 text-white hover:bg-black/80"
+                  >
+                    <X size={12} />
+                  </button>
+                </div>
+              ))}
+              {totalPhotoCount < MAX_PHOTOS && (
                 <label className="w-20 h-20 rounded-lg border border-dashed border-[#2C4A33] flex flex-col items-center justify-center text-[#5C7066] hover:border-[#8BC34A] hover:text-[#8BC34A] cursor-pointer transition-colors">
                   <ImagePlus size={18} />
                   <span className="text-[9px] mt-1">Add</span>
@@ -365,7 +396,9 @@ export default function AddVenueModal({
               disabled={loading}
               className="flex-1 bg-[#8BC34A] text-[#0E1F14] py-2.5 rounded-lg text-sm font-medium hover:bg-[#9BCF5E] transition-colors disabled:opacity-50"
             >
-              {loading ? (uploadingPhotos ? "Uploading photos..." : "Saving...") : "Save Venue"}
+              {loading
+                ? (uploadingPhotos ? "Uploading photos..." : "Saving...")
+                : isEditing ? "Save Changes" : "Save Venue"}
             </button>
           </div>
         </div>
