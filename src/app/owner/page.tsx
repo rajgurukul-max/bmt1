@@ -12,7 +12,7 @@ import PromosPanel from "@/components/PromosPanel";
 import AddVenueModal from "@/components/AddVenueModal";
 import { HOURS, getNextDays, SlotStatus } from "@/lib/data";
 import { getSupabaseAuth } from "@/lib/auth";
-
+import VenuesPanel from "@/components/VenuesPanel";
 const DAYS = getNextDays(5);
 
 export default function Page() {
@@ -204,6 +204,16 @@ useEffect(() => {
           )}
           {tab === "payouts" && <PayoutsPanel />}
           {tab === "promos" && <PromosPanel />}
+          {tab === "venues" && (
+  <VenuesPanel
+    venues={venues}
+    onAddVenue={() => setShowAddVenue(true)}
+    onVenueUpdated={(updated) => {
+      setVenues((prev) => prev.map((v) => (v.id === updated.id ? updated : v)));
+    }}
+  />
+)}
+          
         </div>
       </main>
       {showAddVenue && (
