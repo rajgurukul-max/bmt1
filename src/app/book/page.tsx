@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { MapPin, IndianRupee, Search, Shield, Zap, Star } from "lucide-react";
+import { MapPin, IndianRupee, Search, Shield, Zap, Star, ImageOff } from "lucide-react";
 
 const SPORTS = [
   { name: "All", icon: "🏆" },
@@ -188,11 +188,28 @@ export default function BookPage() {
                     <a
                       key={v.id}
                       href={`/book/${v.id}`}
-                      className="bg-[#16291C] border border-[#1E3324] rounded-xl p-5 hover:border-[#8BC34A] transition-all hover:shadow-lg hover:shadow-[#8BC34A]/10 group"
+                      className="bg-[#16291C] border border-[#1E3324] rounded-xl overflow-hidden hover:border-[#8BC34A] transition-all hover:shadow-lg hover:shadow-[#8BC34A]/10 group flex flex-col"
                     >
-                      {/* Sport badge */}
-                      <div className="flex items-start justify-between mb-3">
-                        <div>
+                      {/* Photo thumbnail */}
+                      <div className="h-36 bg-[#0E1F14] relative overflow-hidden">
+                        {v.photos && v.photos.length > 0 ? (
+                          <img
+                            src={v.photos[0]}
+                            alt={v.name}
+                            className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
+                          />
+                        ) : (
+                          <div className="w-full h-full flex items-center justify-center text-[#2C4A33]">
+                            <ImageOff size={28} />
+                          </div>
+                        )}
+                        <span className="absolute top-2 right-2 text-lg bg-black/40 rounded-full w-8 h-8 flex items-center justify-center">
+                          {SPORTS.find((s) => s.name === v.sport)?.icon || "🏆"}
+                        </span>
+                      </div>
+
+                      <div className="p-5 flex-1 flex flex-col">
+                        <div className="mb-3">
                           <h2 className="font-semibold text-[#F4F7ED] group-hover:text-[#8BC34A] transition-colors">
                             {v.name}
                           </h2>
@@ -200,28 +217,24 @@ export default function BookPage() {
                             <MapPin size={11} />
                             {v.area}{v.city ? `, ${v.city}` : ""}
                           </div>
-
                         </div>
-                        <span className="text-lg">
-                          {SPORTS.find((s) => s.name === v.sport)?.icon || "🏆"}
-                        </span>
-                      </div>
 
-                      <p className="text-xs text-[#9FB0A3] mb-4 line-clamp-2">
-                        {v.description}
-                      </p>
+                        <p className="text-xs text-[#9FB0A3] mb-4 line-clamp-2">
+                          {v.description}
+                        </p>
 
-                      <div className="flex items-center justify-between">
-                        <div className="flex items-center gap-1 font-mono text-sm text-[#F4F7ED]">
-                          <IndianRupee size={13} />
-                          <span className="font-semibold">
-                            {v.price_per_hour?.toLocaleString("en-IN")}
+                        <div className="flex items-center justify-between mt-auto">
+                          <div className="flex items-center gap-1 font-mono text-sm text-[#F4F7ED]">
+                            <IndianRupee size={13} />
+                            <span className="font-semibold">
+                              {v.price_per_hour?.toLocaleString("en-IN")}
+                            </span>
+                            <span className="text-[#9FB0A3] text-xs">/hr</span>
+                          </div>
+                          <span className="text-xs bg-[#8BC34A]/20 text-[#8BC34A] px-2 py-1 rounded-full border border-[#8BC34A]/30 group-hover:bg-[#8BC34A] group-hover:text-[#0E1F14] transition-colors">
+                            Book now →
                           </span>
-                          <span className="text-[#9FB0A3] text-xs">/hr</span>
                         </div>
-                        <span className="text-xs bg-[#8BC34A]/20 text-[#8BC34A] px-2 py-1 rounded-full border border-[#8BC34A]/30 group-hover:bg-[#8BC34A] group-hover:text-[#0E1F14] transition-colors">
-                          Book now →
-                        </span>
                       </div>
                     </a>
                   ))}
