@@ -412,13 +412,17 @@ export default function VenuePage({ params }: { params: { id: string } }) {
             {HOURS.map((h) => {
               const status = getSlotStatus(h);
               const isSelected = selectedSlots.includes(h);
+              const now = new Date();
+              const isToday = selectedDate === now.toISOString().split("T")[0];
+              const isPast = isToday && h <= now.getHours();
+              const isUnavailable = status === "blocked" || status === "booked" || isPast;
               return (
                 <button
                   key={h}
-                  disabled={status === "blocked" || status === "booked"}
+                  disabled={isUnavailable}
                   onClick={() => toggleSlot(h)}
                   className={`py-2.5 rounded-lg text-xs font-mono border transition-colors ${
-                    status === "blocked" || status === "booked"
+                    isUnavailable
                       ? "bg-[#E5484D]/20 border-[#E5484D]/30 text-[#E5484D]/50 cursor-not-allowed"
                       : isSelected
                       ? "bg-[#8BC34A] border-[#8BC34A] text-[#0E1F14] font-semibold"
