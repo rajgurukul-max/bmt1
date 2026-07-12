@@ -6,6 +6,13 @@ export async function POST(req: Request) {
 
   try {
     const body = await req.json();
+    // Reject bookings for time slots that have already passed today (IST)
+const istNow = new Date(Date.now() + 5.5 * 60 * 60 * 1000);
+const istDateStr = istNow.toISOString().split("T")[0];
+const istHour = istNow.getUTCHours();
+if (body.date === istDateStr && Number(body.hour) <= istHour) {
+  return Response.json({ error: "This time slot has already passed" }, { status: 400 });
+}
 
     // Block the slot
     const slotRes = await fetch(`${url}/rest/v1/slots`, {
