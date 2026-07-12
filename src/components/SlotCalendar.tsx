@@ -52,7 +52,7 @@ export default function SlotCalendar({ activeVenue, onVenueChange, days, activeD
             return (
               <button key={h} onClick={() => onToggleSlot(h)}
                 className={`rounded-md py-3 text-xs font-mono text-center transition-colors ${STATUS_STYLE[st]}`}>
-                {h % 12 === 0 ? 12 : h % 12}:00 {h < 12 ? "AM" : "PM"}
+                {(h % 24) % 12 === 0 ? 12 : (h % 24) % 12}:00 {(h % 24) < 12 ? "AM" : "PM"}
               </button>
             );
           })}
