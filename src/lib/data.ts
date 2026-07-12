@@ -8,7 +8,7 @@ export const VENUES: Venue[] = [
   { id: "v3", name: "Malad Smash Court", area: "Malad West", sport: "Badminton" },
 ];
 
-export const HOURS = Array.from({ length: 14 }, (_, i) => 6 + i);
+export const HOURS = Array.from({ length: 20 }, (_, i) => 6 + i);
 
 export function getNextDays(count: number): Date[] {
   const today = new Date();
