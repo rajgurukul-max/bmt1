@@ -3,7 +3,7 @@
 import { useEffect, useState, useMemo } from "react";
 import { MapPin, IndianRupee, ArrowLeft, Tag, X } from "lucide-react";
 
-const HOURS = Array.from({ length: 14 }, (_, i) => 6 + i);
+const HOURS = Array.from({ length: 20 }, (_, i) => 6 + i);
 
 // Easy to tweak later — no other code needs to change
 const STRETCH_DISCOUNT = { minHours: 3, percentOff: 10 };
@@ -15,7 +15,8 @@ declare global {
 }
 
 function formatHour(h: number) {
-  return `${h % 12 === 0 ? 12 : h % 12}:00 ${h < 12 ? "AM" : "PM"}`;
+  const d = h % 24;
+  return `${d % 12 === 0 ? 12 : d % 12}:00 ${d < 12 ? "AM" : "PM"}`;
 }
 
 function getContiguousRuns(hours: number[]): number[][] {
