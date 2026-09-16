@@ -1,0 +1,60 @@
+# Configuration for the intraday trading system.
+# Add new strategies under `strategies:` and switch `active_strategy` to use them.
+
+zerodha:
+  api_key_env: KITE_API_KEY
+  api_secret_env: KITE_API_SECRET
+  access_token_env: KITE_ACCESS_TOKEN
+
+instrument:
+  symbol: ANGELONE
+  exchange: NSE
+  quantity: 1000
+
+data:
+  interval: 5minute          # kiteconnect historical_data interval
+  history_days: 365          # how many calendar days back to keep cached/downloaded
+  cache_dir: data_cache
+  request_chunk_days: 90     # kite historical API caps 5minute candles at ~100 days/request
+  request_pause_seconds: 0.35
+
+market:
+  timezone: Asia/Kolkata
+  open_time: "09:15"
+  close_time: "15:30"
+  square_off_time: "15:10"   # exit all open intraday positions by this time
+
+active_strategy: orb
+
+strategies:
+  orb:
+    range_start: "09:15"
+    range_end: "09:30"
+    min_range_pct: 0.3       # skip the day if (high-low)/low*100 is below this
+    max_range_pct: 1.5       # skip the day if (high-low)/low*100 is above this
+    stop_pct: 0.6            # fallback/floor stop distance, percent of entry price
+    stop_selection: tighter  # "tighter" or "wider" of {range midpoint, stop_pct}
+    target_rr: 1.5           # initial target = target_rr * initial risk
+    trail_ema_period: 10     # after target is hit, trail using this EMA of closes
+    volume_avg_period: 20    # volume must exceed the average of the prior N bars
+    one_trade_per_direction: true
+
+costs:
+  # Zerodha equity intraday charge approximations (editable). All *_pct values are
+  # percentages (e.g. 0.03 means 0.03%), applied to turnover unless noted.
+  brokerage_pct: 0.03
+  brokerage_max_per_order: 20.0
+  stt_sell_pct: 0.025        # STT, intraday equity, sell side only
+  exchange_txn_pct: 0.00297  # NSE transaction charges, both legs
+  sebi_charges_pct: 0.0001   # both legs
+  stamp_duty_buy_pct: 0.003  # stamp duty, buy side only
+  gst_pct: 18.0              # GST on (brokerage + exchange txn charges + SEBI charges)
+  slippage_pct: 0.05         # adverse slippage applied to every simulated fill
+
+risk:
+  max_daily_loss: 3000       # hard rupee stop for the day (realized + unrealized)
+  kill_switch_file: KILL_SWITCH  # touch this file to manually halt trading immediately
+
+logging:
+  log_dir: logs
+  level: INFO
