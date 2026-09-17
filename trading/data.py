@@ -35,13 +35,14 @@ def get_kite_client(cfg: AppConfig) -> KiteConnect:
     return kite
 
 
-def _instruments_cache_path(cfg: AppConfig) -> Path:
-    return cfg.data.cache_dir / f"instruments_{cfg.instrument.exchange}.json"
+def get_instrument_token(
+    kite: KiteConnect, cfg: AppConfig, symbol: str | None = None, exchange: str | None = None
+) -> int:
+    symbol = symbol or cfg.instrument.symbol
+    exchange = exchange or cfg.instrument.exchange
 
-
-def get_instrument_token(kite: KiteConnect, cfg: AppConfig) -> int:
     cfg.data.cache_dir.mkdir(parents=True, exist_ok=True)
-    cache_path = _instruments_cache_path(cfg)
+    cache_path = _instruments_cache_path(cfg, exchange)
 
     instruments = None
     if cache_path.exists():
@@ -51,33 +52,31 @@ def get_instrument_token(kite: KiteConnect, cfg: AppConfig) -> int:
                 instruments = json.load(fh)
 
     if instruments is None:
-        logger.info("Refreshing instrument dump for %s", cfg.instrument.exchange)
-        instruments = kite.instruments(cfg.instrument.exchange)
+        logger.info("Refreshing instrument dump for %s", exchange)
+        instruments = kite.instruments(exchange)
         with open(cache_path, "w") as fh:
             json.dump(instruments, fh)
 
     for inst in instruments:
-        if (
-            inst["tradingsymbol"] == cfg.instrument.symbol
-            and inst["exchange"] == cfg.instrument.exchange
-        ):
+        if inst["tradingsymbol"] == symbol and inst["exchange"] == exchange:
             return int(inst["instrument_token"])
 
-    raise ValueError(
-        f"Instrument {cfg.instrument.symbol} not found on {cfg.instrument.exchange}"
-    )
+    raise ValueError(f"Instrument {symbol} not found on {exchange}")
 
 
-def _candle_cache_path(cfg: AppConfig) -> Path:
+def _instruments_cache_path(cfg: AppConfig, exchange: str | None = None) -> Path:
+    return cfg.data.cache_dir / f"instruments_{exchange or cfg.instrument.exchange}.json"
+
+
+def _candle_cache_path(cfg: AppConfig, symbol: str | None = None, exchange: str | None = None) -> Path:
     cfg.data.cache_dir.mkdir(parents=True, exist_ok=True)
-    return (
-        cfg.data.cache_dir
-        / f"{cfg.instrument.symbol}_{cfg.instrument.exchange}_{cfg.data.interval}.csv"
-    )
+    symbol = symbol or cfg.instrument.symbol
+    exchange = exchange or cfg.instrument.exchange
+    return cfg.data.cache_dir / f"{symbol}_{exchange}_{cfg.data.interval}.csv"
 
 
-def load_cached_candles(cfg: AppConfig) -> pd.DataFrame:
-    path = _candle_cache_path(cfg)
+def load_cached_candles(cfg: AppConfig, symbol: str | None = None, exchange: str | None = None) -> pd.DataFrame:
+    path = _candle_cache_path(cfg, symbol, exchange)
     if not path.exists():
         return pd.DataFrame(columns=["date", "open", "high", "low", "close", "volume"])
     df = pd.read_csv(path, parse_dates=["date"])
@@ -85,8 +84,10 @@ def load_cached_candles(cfg: AppConfig) -> pd.DataFrame:
     return df.sort_values("date").reset_index(drop=True)
 
 
-def save_cached_candles(cfg: AppConfig, df: pd.DataFrame) -> None:
-    path = _candle_cache_path(cfg)
+def save_cached_candles(
+    cfg: AppConfig, df: pd.DataFrame, symbol: str | None = None, exchange: str | None = None
+) -> None:
+    path = _candle_cache_path(cfg, symbol, exchange)
     df.sort_values("date").drop_duplicates(subset="date").to_csv(path, index=False)
 
 
@@ -124,9 +125,15 @@ def _download_range(
     return df[["date", "open", "high", "low", "close", "volume"]]
 
 
-def update_cache(cfg: AppConfig, refresh_all: bool = False) -> pd.DataFrame:
-    kite = get_kite_client(cfg)
-    token = get_instrument_token(kite, cfg)
+def update_cache(
+    cfg: AppConfig,
+    refresh_all: bool = False,
+    kite: KiteConnect | None = None,
+    symbol: str | None = None,
+    exchange: str | None = None,
+) -> pd.DataFrame:
+    kite = kite or get_kite_client(cfg)
+    token = get_instrument_token(kite, cfg, symbol, exchange)
 
     now = datetime.now()
     earliest_wanted = now - timedelta(days=cfg.data.history_days)
@@ -135,20 +142,25 @@ def update_cache(cfg: AppConfig, refresh_all: bool = False) -> pd.DataFrame:
     from_dt = earliest_wanted
 
     if not refresh_all:
-        existing = load_cached_candles(cfg)
+        existing = load_cached_candles(cfg, symbol, exchange)
         if not existing.empty:
             last_cached = existing["date"].max().to_pydatetime().replace(tzinfo=None)
             from_dt = max(earliest_wanted, last_cached + timedelta(minutes=1))
 
     if from_dt >= now:
-        logger.info("Cache already up to date.")
+        logger.info("Cache already up to date for %s.", symbol or cfg.instrument.symbol)
         return existing
 
     fresh = _download_range(kite, token, from_dt, now, cfg)
     combined = pd.concat([existing, fresh], ignore_index=True)
     combined = combined.sort_values("date").drop_duplicates(subset="date").reset_index(drop=True)
-    save_cached_candles(cfg, combined)
-    logger.info("Cache now holds %d candles (%s -> %s)", len(combined), combined["date"].min(), combined["date"].max())
+    save_cached_candles(cfg, combined, symbol, exchange)
+    logger.info(
+        "%s cache now holds %d candles (%s -> %s)",
+        symbol or cfg.instrument.symbol, len(combined),
+        combined["date"].min() if not combined.empty else None,
+        combined["date"].max() if not combined.empty else None,
+    )
     return combined
 
 
