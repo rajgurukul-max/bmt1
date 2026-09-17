@@ -31,8 +31,8 @@ strategies:
     range_start: "09:15"
     range_end: "09:30"
     min_range_pct: 0.3       # skip the day if (high-low)/low*100 is below this
-    max_range_pct: 1.5       # skip the day if (high-low)/low*100 is above this
-    stop_pct: 0.6            # fallback/floor stop distance, percent of entry price
+    max_range_pct: 1.2       # skip the day if (high-low)/low*100 is above this
+    stop_pct: 0.5            # fallback/floor stop distance, percent of entry price
     stop_selection: tighter  # "tighter" or "wider" of {range midpoint, stop_pct}
     target_rr: 1.5           # initial target = target_rr * initial risk
     trail_ema_period: 10     # after target is hit, trail using this EMA of closes
