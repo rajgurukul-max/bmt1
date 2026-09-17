@@ -125,6 +125,7 @@ class PaperTrader:
             self._signal_log_writer.writerow(
                 ["timestamp", "side", "action", "signal_price", "fill_price", "qty", "reason"]
             )
+            self._signal_log_file.flush()
 
     def _log_signal(self, sig: Signal, fill_price: float) -> None:
         self._signal_log_writer.writerow(

@@ -170,9 +170,14 @@ def main() -> None:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     parser = argparse.ArgumentParser()
     parser.add_argument("--reports-dir", default=None)
+    parser.add_argument("--strategy", default=None, help="Override active_strategy from config.yaml.")
     args = parser.parse_args()
 
     cfg = load_config()
+    if args.strategy:
+        cfg.strategy.name = args.strategy
+        cfg.strategy.params = cfg.raw["strategies"][args.strategy]
+
     df = load_cached_candles(cfg)
     if df.empty:
         raise SystemExit(

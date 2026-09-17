@@ -100,9 +100,14 @@ def main() -> None:
              "comparable across stocks at very different prices (default: Rs 3,00,000, "
              "roughly 1000 shares of a Rs 300 stock).",
     )
+    parser.add_argument("--strategy", default=None, help="Override active_strategy from config.yaml.")
     args = parser.parse_args()
 
     cfg = load_config()
+    if args.strategy:
+        cfg.strategy.name = args.strategy
+        cfg.strategy.params = cfg.raw["strategies"][args.strategy]
+
     symbols = load_universe(Path(args.universe_file))
     logger.info(
         "Screening %d symbols with strategy '%s' at Rs %.0f capital/trade",

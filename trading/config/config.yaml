@@ -39,6 +39,15 @@ strategies:
     volume_avg_period: 20    # volume must exceed the average of the prior N bars
     one_trade_per_direction: true
 
+  vwap_reversion:
+    band_pct: 1.0              # min %-distance from VWAP to trigger a fade entry
+    stop_pct: 0.7               # stop distance beyond entry, percent of entry price
+    min_bars_before_trade: 3    # skip the first N candles of the day (let VWAP settle)
+    max_trades_per_day: 2
+    cooldown_bars: 3            # candles to wait after an exit before re-entering
+    require_below_avg_volume: false
+    volume_avg_period: 20
+
 costs:
   # Zerodha equity intraday charge approximations (editable). All *_pct values are
   # percentages (e.g. 0.03 means 0.03%), applied to turnover unless noted.

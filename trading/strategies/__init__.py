@@ -1,8 +1,10 @@
 from strategies.base import StrategyEngine
 from strategies.orb import OpeningRangeBreakoutEngine
+from strategies.vwap_reversion import VwapReversionEngine
 
 _REGISTRY = {
     "orb": OpeningRangeBreakoutEngine,
+    "vwap_reversion": VwapReversionEngine,
 }
 
 
