@@ -34,11 +34,11 @@ def load_universe(path: Path) -> list[str]:
         return [line.strip() for line in fh if line.strip() and not line.startswith("#")]
 
 
-def summarize(symbol: str, trades) -> dict:
+def summarize(symbol: str, trades, qty: int, capital_per_trade: float) -> dict:
     if not trades:
         return {
-            "symbol": symbol, "trades": 0, "win_rate": None, "net_pnl": 0.0,
-            "avg_win": None, "avg_loss": None, "max_drawdown": 0.0,
+            "symbol": symbol, "qty": qty, "trades": 0, "win_rate": None, "net_pnl": 0.0,
+            "return_pct": 0.0, "avg_win": None, "avg_loss": None, "max_drawdown": 0.0,
         }
     pnl = pd.Series([t.net_pnl for t in trades])
     equity = pnl.cumsum()
@@ -46,16 +46,21 @@ def summarize(symbol: str, trades) -> dict:
     losses = pnl[pnl <= 0]
     return {
         "symbol": symbol,
+        "qty": qty,
         "trades": len(pnl),
         "win_rate": len(wins) / len(pnl) * 100,
         "net_pnl": equity.iloc[-1],
+        "return_pct": equity.iloc[-1] / capital_per_trade * 100,
         "avg_win": wins.mean() if not wins.empty else 0.0,
         "avg_loss": losses.mean() if not losses.empty else 0.0,
         "max_drawdown": (equity - equity.cummax()).min(),
     }
 
 
-def scan(cfg: AppConfig, symbols: list[str], skip_download: bool) -> pd.DataFrame:
+def scan(cfg: AppConfig, symbols: list[str], skip_download: bool, capital_per_trade: float) -> pd.DataFrame:
+    """Backtest every symbol sized to roughly equal capital exposure (not equal share
+    count), so P&L is comparable across stocks of wildly different prices instead of
+    being dominated by whichever stock happens to be most expensive per share."""
     kite = None if skip_download else get_kite_client(cfg)
     rows = []
 
@@ -69,8 +74,13 @@ def scan(cfg: AppConfig, symbols: list[str], skip_download: bool) -> pd.DataFram
             if df.empty:
                 logger.warning("No data for %s, skipping.", symbol)
                 continue
+
+            typical_price = df["close"].median()
+            qty = max(1, round(capital_per_trade / typical_price))
+            cfg.instrument.quantity = qty
+
             trades = run_backtest(cfg, df)
-            rows.append(summarize(symbol, trades))
+            rows.append(summarize(symbol, trades, qty, capital_per_trade))
         except Exception:
             logger.exception("Failed to process %s", symbol)
 
@@ -84,30 +94,40 @@ def main() -> None:
     parser.add_argument("--skip-download", action="store_true", help="Reuse cached candles only.")
     parser.add_argument("--top", type=int, default=5)
     parser.add_argument("--reports-dir", default=None)
+    parser.add_argument(
+        "--capital-per-trade", type=float, default=300_000,
+        help="Notional capital per trade used to size qty per symbol, so P&L is "
+             "comparable across stocks at very different prices (default: Rs 3,00,000, "
+             "roughly 1000 shares of a Rs 300 stock).",
+    )
     args = parser.parse_args()
 
     cfg = load_config()
     symbols = load_universe(Path(args.universe_file))
-    logger.info("Screening %d symbols with strategy '%s'", len(symbols), cfg.strategy.name)
+    logger.info(
+        "Screening %d symbols with strategy '%s' at Rs %.0f capital/trade",
+        len(symbols), cfg.strategy.name, args.capital_per_trade,
+    )
 
-    results = scan(cfg, symbols, args.skip_download)
+    results = scan(cfg, symbols, args.skip_download, args.capital_per_trade)
 
     reports_dir = Path(args.reports_dir) if args.reports_dir else Path(__file__).resolve().parent / "reports"
     reports_dir.mkdir(parents=True, exist_ok=True)
     out_path = reports_dir / "universe_scan.csv"
-    results.sort_values("net_pnl", ascending=False).to_csv(out_path, index=False)
+    results.sort_values("return_pct", ascending=False).to_csv(out_path, index=False)
 
-    ranked = results[results.trades >= MIN_TRADES_FOR_RANKING].sort_values("net_pnl", ascending=False)
+    ranked = results[results.trades >= MIN_TRADES_FOR_RANKING].sort_values("return_pct", ascending=False)
 
     pd.set_option("display.width", 160)
     print("=" * 70)
     print(f"Screened {len(results)} symbols ({(results.trades >= MIN_TRADES_FOR_RANKING).sum()} with >= {MIN_TRADES_FOR_RANKING} trades)")
+    print(f"Each symbol sized to ~Rs {args.capital_per_trade:,.0f} notional per trade (see 'qty' column)")
     print(f"Full leaderboard written to {out_path}")
     print("-" * 70)
-    print(f"TOP {args.top} by net P&L (min {MIN_TRADES_FOR_RANKING} trades):")
+    print(f"TOP {args.top} by return % on capital (min {MIN_TRADES_FOR_RANKING} trades):")
     print(ranked.head(args.top).to_string(index=False))
     print("-" * 70)
-    print(f"BOTTOM {args.top} by net P&L (min {MIN_TRADES_FOR_RANKING} trades):")
+    print(f"BOTTOM {args.top} by return % on capital (min {MIN_TRADES_FOR_RANKING} trades):")
     print(ranked.tail(args.top).to_string(index=False))
     print("=" * 70)
 
