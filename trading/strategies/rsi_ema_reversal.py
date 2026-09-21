@@ -39,6 +39,8 @@ class RsiEmaReversalEngine(StrategyEngine):
         # time if not given) -- lets this strategy force flat well before end of day,
         # independent of other strategies' square-off behavior.
         self.force_exit_t = _parse_time(params.get("force_exit_time", market_cfg.square_off_time))
+        self.enable_short = bool(params.get("enable_short", True))
+        self.enable_long = bool(params.get("enable_long", True))
 
         self.short_window_start = _parse_time(params["short_window_start"])
         self.short_window_end = _parse_time(params["short_window_end"])
@@ -127,14 +129,16 @@ class RsiEmaReversalEngine(StrategyEngine):
             return signals
 
         if (
-            self.short_window_start <= t < self.short_window_end
+            self.enable_short
+            and self.short_window_start <= t < self.short_window_end
             and not self.traded_short
             and rsi >= self.rsi_short_threshold
             and candle.close > ema
         ):
             signals.append(self._open_position(Side.SHORT, candle))
         elif (
-            self.long_window_start <= t < self.long_window_end
+            self.enable_long
+            and self.long_window_start <= t < self.long_window_end
             and not self.traded_long
             and rsi <= self.rsi_long_threshold
             and candle.close < ema
