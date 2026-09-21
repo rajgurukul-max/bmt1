@@ -16,7 +16,8 @@ against the local EMA trend, restricted to the early-session window where the
 first-hour analysis (hour1_analysis.py) showed most of the hour's range gets
 established. At most one short and one long entry per day. RSI/EMA computed
 continuously across days (not reset daily) so they're warmed up by the window.
-All positions forced flat at `square_off_time`.
+All positions forced flat at `force_exit_time` (defaults to the market-wide
+`square_off_time` if not given).
 """
 from __future__ import annotations
 
@@ -34,7 +35,10 @@ def _parse_time(value: str) -> time:
 class RsiEmaReversalEngine(StrategyEngine):
     def __init__(self, params: dict, qty: int, market_cfg):
         super().__init__(params, qty, market_cfg)
-        self.square_off_t = _parse_time(market_cfg.square_off_time)
+        # Strategy-specific early exit deadline (defaults to the market-wide square-off
+        # time if not given) -- lets this strategy force flat well before end of day,
+        # independent of other strategies' square-off behavior.
+        self.force_exit_t = _parse_time(params.get("force_exit_time", market_cfg.square_off_time))
 
         self.short_window_start = _parse_time(params["short_window_start"])
         self.short_window_end = _parse_time(params["short_window_end"])
@@ -110,9 +114,9 @@ class RsiEmaReversalEngine(StrategyEngine):
         signals: list[Signal] = []
         t = candle.timestamp.time()
 
-        if t >= self.square_off_t:
+        if t >= self.force_exit_t:
             if self.position is not None:
-                signals.append(self._close_position(candle.timestamp, candle.close, "square_off"))
+                signals.append(self._close_position(candle.timestamp, candle.close, "time_exit"))
             return signals
 
         if self.position is not None:
