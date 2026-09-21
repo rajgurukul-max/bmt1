@@ -66,6 +66,7 @@ def main() -> None:
     if df.empty:
         raise SystemExit("No 1-min data available.")
 
+    df["date"] = pd.to_datetime(df["date"])
     df = df.sort_values("date").reset_index(drop=True)
     print(f"Have {len(df)} candles from {df['date'].min()} to {df['date'].max()}")
 
