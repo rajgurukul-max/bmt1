@@ -91,6 +91,17 @@ def main() -> None:
         low_val, low_time = low_row["low"], low_row["date"]
         sequence = "HIGH_FIRST" if high_time < low_time else ("LOW_FIRST" if low_time < high_time else "SAME_BAR")
 
+        price_vs_ema_high = (
+            "ABOVE" if pd.notna(high_row["ema"]) and high_row["close"] > high_row["ema"] else "BELOW"
+        )
+        price_vs_ema_low = (
+            "ABOVE" if pd.notna(low_row["ema"]) and low_row["close"] > low_row["ema"] else "BELOW"
+        )
+        range_established_min = max(
+            (high_time - window.iloc[0]["date"]).total_seconds() / 60,
+            (low_time - window.iloc[0]["date"]).total_seconds() / 60,
+        )
+
         rows.append({
             "date": day,
             "open": round(open_price, 2),
@@ -100,10 +111,13 @@ def main() -> None:
             "low_time": low_time.strftime("%H:%M"),
             "close": round(close_price, 2),
             "sequence": sequence,
+            "range_established_min": round(range_established_min, 1),
             "rsi_at_high": round(high_row["rsi"], 1) if pd.notna(high_row["rsi"]) else None,
             "rsi_at_low": round(low_row["rsi"], 1) if pd.notna(low_row["rsi"]) else None,
             "ema_at_high": round(high_row["ema"], 2) if pd.notna(high_row["ema"]) else None,
             "ema_at_low": round(low_row["ema"], 2) if pd.notna(low_row["ema"]) else None,
+            "price_vs_ema_at_high": price_vs_ema_high,
+            "price_vs_ema_at_low": price_vs_ema_low,
         })
 
     result = pd.DataFrame(rows)
@@ -138,6 +152,30 @@ def main() -> None:
     print(f"Avg EMA@high  : {result['ema_at_high'].mean():.2f}   Avg EMA@low : {result['ema_at_low'].mean():.2f}")
     print(f"Avg range     : {(result['high'] - result['low']).mean():.2f} pts "
           f"({((result['high'] - result['low']) / result['open'] * 100).mean():.2f}% of open)")
+
+    pve_high_counts = result["price_vs_ema_at_high"].value_counts()
+    pve_low_counts = result["price_vs_ema_at_low"].value_counts()
+    print(f"Price vs EMA @high: {dict(pve_high_counts)}   @low: {dict(pve_low_counts)}")
+
+    print("\n" + "-" * 60)
+    print("EARLY vs LATE split (by when the hour's full range was established)")
+    print("-" * 60)
+    for label, mask in [
+        ("EARLY (<=10 min, i.e. by 09:25)", result["range_established_min"] <= 10),
+        ("MID (10-30 min, i.e. 09:25-09:45)", (result["range_established_min"] > 10) & (result["range_established_min"] <= 30)),
+        ("LATE (>30 min, i.e. after 09:45)", result["range_established_min"] > 30),
+    ]:
+        sub = result[mask]
+        if sub.empty:
+            print(f"{label}: 0 days")
+            continue
+        rng = (sub["high"] - sub["low"])
+        print(
+            f"{label}: {len(sub)} days ({len(sub)/len(result)*100:.0f}%), "
+            f"avg range {rng.mean():.2f}pts, "
+            f"RSI@high {sub['rsi_at_high'].mean():.1f}, RSI@low {sub['rsi_at_low'].mean():.1f}, "
+            f"{(sub['sequence']=='HIGH_FIRST').mean()*100:.0f}% high-first"
+        )
 
 
 if __name__ == "__main__":
