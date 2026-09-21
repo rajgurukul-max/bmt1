@@ -10,6 +10,12 @@ Target:  entry + target_rr * initial_risk. Once hit, switch to trailing the
 Skips the day entirely if the opening range is outside [min_range_pct, max_range_pct].
 At most one long and one short entry per day. All positions forced flat at
 `square_off_time`.
+
+Optional trend filter (`trend_filter: "ema"`, off by default): only takes a long
+breakout when price is above a longer `trend_ema_period` EMA, and only takes a
+short breakdown when price is below it. Diagnosed need: on ANGELONE, ORB longs won
+25% of the time vs. 53% for shorts during the underlying downtrend in our test
+period -- this filter stops the strategy fighting the prevailing trend.
 """
 from __future__ import annotations
 
@@ -42,6 +48,12 @@ class OpeningRangeBreakoutEngine(StrategyEngine):
         ema_period = int(params["trail_ema_period"])
         self._ema_k = 2 / (ema_period + 1)
         self._ema: float | None = None
+
+        self.trend_filter = params.get("trend_filter", "none")
+        self._trend_ema: float | None = None
+        if self.trend_filter == "ema":
+            trend_period = int(params["trend_ema_period"])
+            self._trend_ema_k = 2 / (trend_period + 1)
 
         self._volume_window: deque[float] = deque(maxlen=int(params["volume_avg_period"]))
 
@@ -89,6 +101,11 @@ class OpeningRangeBreakoutEngine(StrategyEngine):
             candle.close * self._ema_k + self._ema * (1 - self._ema_k)
         )
 
+        if self.trend_filter == "ema":
+            self._trend_ema = candle.close if self._trend_ema is None else (
+                candle.close * self._trend_ema_k + self._trend_ema * (1 - self._trend_ema_k)
+            )
+
         if warmup:
             return []
 
@@ -132,6 +149,7 @@ class OpeningRangeBreakoutEngine(StrategyEngine):
             and candle.close > vwap
             and candle.volume > vol_avg
             and not self.traded_long
+            and self._trend_ok(Side.LONG, candle)
         ):
             signals.append(self._open_position(Side.LONG, candle))
         elif (
@@ -139,10 +157,16 @@ class OpeningRangeBreakoutEngine(StrategyEngine):
             and candle.close < vwap
             and candle.volume > vol_avg
             and not self.traded_short
+            and self._trend_ok(Side.SHORT, candle)
         ):
             signals.append(self._open_position(Side.SHORT, candle))
 
         return signals
+
+    def _trend_ok(self, side: Side, candle: Candle) -> bool:
+        if self.trend_filter != "ema" or self._trend_ema is None:
+            return True
+        return candle.close > self._trend_ema if side == Side.LONG else candle.close < self._trend_ema
 
     def _stop_distance(self, entry: float) -> float:
         dist_mid = abs(entry - self._range_midpoint)

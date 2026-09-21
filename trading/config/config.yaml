@@ -39,6 +39,20 @@ strategies:
     volume_avg_period: 20    # volume must exceed the average of the prior N bars
     one_trade_per_direction: true
 
+  orb_trend:
+    range_start: "09:15"
+    range_end: "09:30"
+    min_range_pct: 0.3
+    max_range_pct: 1.2
+    stop_pct: 0.5
+    stop_selection: tighter
+    target_rr: 1.5
+    trail_ema_period: 10
+    volume_avg_period: 20
+    one_trade_per_direction: true
+    trend_filter: ema         # only take breakouts aligned with this EMA's direction
+    trend_ema_period: 240     # continuous across days, roughly ~3 trading days of 5-min bars
+
   vwap_reversion:
     band_pct: 1.0              # min %-distance from VWAP to trigger a fade entry
     stop_pct: 0.7               # stop distance beyond entry, percent of entry price

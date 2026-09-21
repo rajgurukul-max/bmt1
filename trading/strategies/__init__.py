@@ -4,6 +4,7 @@ from strategies.vwap_reversion import VwapReversionEngine
 
 _REGISTRY = {
     "orb": OpeningRangeBreakoutEngine,
+    "orb_trend": OpeningRangeBreakoutEngine,
     "vwap_reversion": VwapReversionEngine,
 }
 
