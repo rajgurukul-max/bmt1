@@ -53,6 +53,20 @@ strategies:
     trend_filter: ema         # only take breakouts aligned with this EMA's direction
     trend_ema_period: 240     # continuous across days, roughly ~3 trading days of 5-min bars
 
+  rsi_ema_reversal:
+    short_window_start: "09:20"
+    short_window_end: "09:30"
+    rsi_short_threshold: 55       # RSI >= this triggers the short
+    short_target_points: 4
+    short_stop_points: 2
+    long_window_start: "09:20"
+    long_window_end: "09:35"
+    rsi_long_threshold: 40        # RSI <= this triggers the long
+    long_target_points: 4
+    long_stop_points: 2
+    rsi_period: 14
+    ema_period: 20
+
   vwap_reversion:
     band_pct: 1.0              # min %-distance from VWAP to trigger a fade entry
     stop_pct: 0.7               # stop distance beyond entry, percent of entry price
