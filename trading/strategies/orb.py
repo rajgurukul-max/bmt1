@@ -111,6 +111,11 @@ class OpeningRangeBreakoutEngine(StrategyEngine):
 
         signals: list[Signal] = []
 
+        if t < self.range_start_t:
+            # Before the range window even opens (relevant when range_start is later
+            # than market open) -- nothing to track or lock yet.
+            return signals
+
         if self.range_start_t <= t < self.range_end_t:
             if self.range_high is None:
                 self.range_high, self.range_low = candle.high, candle.low
