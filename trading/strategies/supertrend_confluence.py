@@ -49,6 +49,8 @@ class SupertrendConfluenceEngine(StrategyEngine):
         self.bb_std = float(params.get("bb_std", 2.0))
         self.near_pct = float(params.get("near_pct", 0.3))
         self.one_trade_per_day = bool(params.get("one_trade_per_day", False))
+        self.use_r1_filter = bool(params.get("use_r1_filter", True))
+        self.use_bb_filter = bool(params.get("use_bb_filter", True))
 
         # exit_mode: "supertrend" (default, flip-of-trend exit), "chandelier" (ATR
         # trailing stop from the highest close since entry -- tighter, locks in gains
@@ -214,13 +216,23 @@ class SupertrendConfluenceEngine(StrategyEngine):
                 signals.append(exit_sig)
             return signals
 
-        if self._pivot_r1 is None or rsi is None or bb_upper is None or not self._trading_allowed():
+        if rsi is None or not self._trading_allowed():
+            return signals
+        if self.use_r1_filter and self._pivot_r1 is None:
+            return signals
+        if self.use_bb_filter and bb_upper is None:
             return signals
         if self.one_trade_per_day and self.traded_today:
             return signals
 
-        near_r1 = abs(candle.close - self._pivot_r1) / self._pivot_r1 * 100 <= self.near_pct
-        near_bb_upper = abs(candle.close - bb_upper) / bb_upper * 100 <= self.near_pct
+        near_r1 = (
+            abs(candle.close - self._pivot_r1) / self._pivot_r1 * 100 <= self.near_pct
+            if self.use_r1_filter else True
+        )
+        near_bb_upper = (
+            abs(candle.close - bb_upper) / bb_upper * 100 <= self.near_pct
+            if self.use_bb_filter else True
+        )
 
         if self._st_uptrend and rsi >= self.rsi_threshold and near_r1 and near_bb_upper:
             signals.append(self._open_position(candle))
