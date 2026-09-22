@@ -51,7 +51,6 @@ class SupertrendConfluenceEngine(StrategyEngine):
         self.one_trade_per_day = bool(params.get("one_trade_per_day", False))
         self.use_r1_filter = bool(params.get("use_r1_filter", True))
         self.use_bb_filter = bool(params.get("use_bb_filter", True))
-        self.use_vwap_filter = bool(params.get("use_vwap_filter", False))
 
         # exit_mode: "supertrend" (default, flip-of-trend exit), "chandelier" (ATR
         # trailing stop from the highest close since entry -- tighter, locks in gains
@@ -80,10 +79,6 @@ class SupertrendConfluenceEngine(StrategyEngine):
         # Bollinger state
         self._closes: list[float] = []
 
-        # VWAP state (session-cumulative, reset daily)
-        self._cum_pv = 0.0
-        self._cum_vol = 0.0
-
         # Pivot state
         self._prev_day_high: float | None = None
         self._prev_day_low: float | None = None
@@ -98,8 +93,6 @@ class SupertrendConfluenceEngine(StrategyEngine):
     def _reset_day_state(self) -> None:
         self.traded_today = False
         self.position: dict | None = None
-        self._cum_pv = 0.0
-        self._cum_vol = 0.0
 
     def on_new_day(self, trading_day: date) -> None:
         if self._today_high is not None:
@@ -200,11 +193,6 @@ class SupertrendConfluenceEngine(StrategyEngine):
         self._today_high = candle.high if self._today_high is None else max(self._today_high, candle.high)
         self._today_low = candle.low if self._today_low is None else min(self._today_low, candle.low)
 
-        typical = (candle.high + candle.low + candle.close) / 3
-        self._cum_pv += typical * candle.volume
-        self._cum_vol += candle.volume
-        vwap = self._cum_pv / self._cum_vol if self._cum_vol > 0 else candle.close
-
         prev_uptrend = self._st_uptrend
         self._update_supertrend(candle)
         rsi = self._update_rsi(candle)
@@ -245,9 +233,8 @@ class SupertrendConfluenceEngine(StrategyEngine):
             abs(candle.close - bb_upper) / bb_upper * 100 <= self.near_pct
             if self.use_bb_filter else True
         )
-        above_vwap = candle.close > vwap if self.use_vwap_filter else True
 
-        if self._st_uptrend and rsi >= self.rsi_threshold and near_r1 and near_bb_upper and above_vwap:
+        if self._st_uptrend and rsi >= self.rsi_threshold and near_r1 and near_bb_upper:
             signals.append(self._open_position(candle))
 
         return signals
