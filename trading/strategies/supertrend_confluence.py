@@ -50,6 +50,17 @@ class SupertrendConfluenceEngine(StrategyEngine):
         self.near_pct = float(params.get("near_pct", 0.3))
         self.one_trade_per_day = bool(params.get("one_trade_per_day", False))
 
+        # exit_mode: "supertrend" (default, flip-of-trend exit), "chandelier" (ATR
+        # trailing stop from the highest close since entry -- tighter, locks in gains
+        # sooner than waiting for a full trend flip), "rsi_fade" (exit as soon as
+        # momentum fades below rsi_exit_threshold, with a supertrend-flip backstop),
+        # or "fixed_rr" (fixed ATR-based stop and R-multiple target, no trailing).
+        self.exit_mode = params.get("exit_mode", "supertrend")
+        self.chandelier_atr_mult = float(params.get("chandelier_atr_mult", 2.0))
+        self.rsi_exit_threshold = float(params.get("rsi_exit_threshold", 50))
+        self.fixed_stop_atr_mult = float(params.get("fixed_stop_atr_mult", 1.5))
+        self.fixed_target_rr = float(params.get("fixed_target_rr", 2.0))
+
         # Supertrend state
         self._atr: float | None = None
         self._prev_close: float | None = None
@@ -197,13 +208,10 @@ class SupertrendConfluenceEngine(StrategyEngine):
                 signals.append(self._close_position(candle.timestamp, candle.close, "square_off"))
             return signals
 
-        # Supertrend flip from up to down is both the stop and the reversal exit.
-        # Fill at the candle's actual close -- NOT self._st_value, which by this point
-        # reflects the *new* (downtrend) band and can sit well above the price that
-        # actually triggered the flip, understating or even inverting the loss.
         if self.position is not None:
-            if prev_uptrend and not self._st_uptrend:
-                signals.append(self._close_position(candle.timestamp, candle.close, "supertrend_reversal"))
+            exit_sig = self._check_exit(candle, prev_uptrend, rsi)
+            if exit_sig is not None:
+                signals.append(exit_sig)
             return signals
 
         if self._pivot_r1 is None or rsi is None or bb_upper is None or not self._trading_allowed():
@@ -221,12 +229,52 @@ class SupertrendConfluenceEngine(StrategyEngine):
 
     def _open_position(self, candle: Candle) -> Signal:
         entry = candle.close
-        self.position = {"side": Side.LONG, "entry_time": candle.timestamp, "entry_price": entry, "stop": self._st_value}
+        pos = {"side": Side.LONG, "entry_time": candle.timestamp, "entry_price": entry, "stop": self._st_value}
+        if self.exit_mode == "chandelier":
+            pos["highest_close"] = entry
+        elif self.exit_mode == "fixed_rr":
+            risk = self.fixed_stop_atr_mult * self._atr
+            pos["stop"] = entry - risk
+            pos["target"] = entry + self.fixed_target_rr * risk
+        self.position = pos
         self.traded_today = True
         return Signal(
             timestamp=candle.timestamp, side=Side.LONG, action=SignalAction.ENTRY,
             price=entry, qty=self.qty, reason="supertrend_confluence",
         )
+
+    def _check_exit(self, candle: Candle, prev_uptrend: bool | None, rsi: float | None) -> Signal | None:
+        pos = self.position
+        assert pos is not None
+        flipped_down = bool(prev_uptrend) and not self._st_uptrend
+
+        if self.exit_mode == "chandelier":
+            pos["highest_close"] = max(pos["highest_close"], candle.close)
+            trail_stop = pos["highest_close"] - self.chandelier_atr_mult * self._atr
+            if candle.close < trail_stop:
+                return self._close_position(candle.timestamp, candle.close, "chandelier_exit")
+            if flipped_down:
+                return self._close_position(candle.timestamp, candle.close, "supertrend_reversal")
+            return None
+
+        if self.exit_mode == "rsi_fade":
+            if rsi is not None and rsi <= self.rsi_exit_threshold:
+                return self._close_position(candle.timestamp, candle.close, "rsi_fade_exit")
+            if flipped_down:
+                return self._close_position(candle.timestamp, candle.close, "supertrend_reversal")
+            return None
+
+        if self.exit_mode == "fixed_rr":
+            if candle.low <= pos["stop"]:
+                return self._close_position(candle.timestamp, pos["stop"], "stop_loss")
+            if candle.high >= pos["target"]:
+                return self._close_position(candle.timestamp, pos["target"], "target_hit")
+            return None
+
+        # default: "supertrend" -- trend flip is the only exit
+        if flipped_down:
+            return self._close_position(candle.timestamp, candle.close, "supertrend_reversal")
+        return None
 
     def _close_position(self, timestamp: datetime, price: float, reason: str) -> Signal:
         pos = self.position
