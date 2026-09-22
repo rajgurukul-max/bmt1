@@ -5,6 +5,7 @@ from strategies.rsi_ema_reversal import RsiEmaReversalEngine
 from strategies.bollinger_reversion import BollingerReversionEngine
 from strategies.ema_crossover import EmaCrossoverEngine
 from strategies.prev_day_breakout import PrevDayBreakoutEngine
+from strategies.supertrend_confluence import SupertrendConfluenceEngine
 
 _REGISTRY = {
     "orb": OpeningRangeBreakoutEngine,
@@ -14,6 +15,7 @@ _REGISTRY = {
     "bollinger_reversion": BollingerReversionEngine,
     "ema_crossover": EmaCrossoverEngine,
     "prev_day_breakout": PrevDayBreakoutEngine,
+    "supertrend_confluence": SupertrendConfluenceEngine,
 }
 
 
