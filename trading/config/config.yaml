@@ -67,6 +67,16 @@ strategies:
     rsi_period: 14
     ema_period: 20
 
+  supertrend_confluence:
+    supertrend_period: 10
+    supertrend_mult: 3.0
+    rsi_period: 14
+    rsi_threshold: 65      # RSI >= this, as specified
+    bb_period: 20
+    bb_std: 2.0
+    near_pct: 0.3          # how close price must be to pivot R1 / BB upper band, in %
+    one_trade_per_day: false
+
   vwap_reversion:
     band_pct: 1.0              # min %-distance from VWAP to trigger a fade entry
     stop_pct: 0.7               # stop distance beyond entry, percent of entry price

@@ -57,7 +57,10 @@ def summarize(symbol: str, trades, qty: int, capital_per_trade: float) -> dict:
     }
 
 
-def scan(cfg: AppConfig, symbols: list[str], skip_download: bool, capital_per_trade: float) -> pd.DataFrame:
+def scan(
+    cfg: AppConfig, symbols: list[str], skip_download: bool, capital_per_trade: float,
+    last_days: int | None = None,
+) -> pd.DataFrame:
     """Backtest every symbol sized to roughly equal capital exposure (not equal share
     count), so P&L is comparable across stocks of wildly different prices instead of
     being dominated by whichever stock happens to be most expensive per share."""
@@ -74,6 +77,9 @@ def scan(cfg: AppConfig, symbols: list[str], skip_download: bool, capital_per_tr
             if df.empty:
                 logger.warning("No data for %s, skipping.", symbol)
                 continue
+            if last_days is not None:
+                cutoff = df["date"].max().date() - pd.Timedelta(days=last_days)
+                df = df[df["date"].dt.date >= cutoff].reset_index(drop=True)
 
             typical_price = df["close"].median()
             qty = max(1, round(capital_per_trade / typical_price))
@@ -101,6 +107,8 @@ def main() -> None:
              "roughly 1000 shares of a Rs 300 stock).",
     )
     parser.add_argument("--strategy", default=None, help="Override active_strategy from config.yaml.")
+    parser.add_argument("--last-days", type=int, default=None, help="Restrict to the last N calendar days of cached data.")
+    parser.add_argument("--min-trades", type=int, default=MIN_TRADES_FOR_RANKING, help="Minimum trades for a symbol to be ranked.")
     args = parser.parse_args()
 
     cfg = load_config()
@@ -114,25 +122,25 @@ def main() -> None:
         len(symbols), cfg.strategy.name, args.capital_per_trade,
     )
 
-    results = scan(cfg, symbols, args.skip_download, args.capital_per_trade)
+    results = scan(cfg, symbols, args.skip_download, args.capital_per_trade, last_days=args.last_days)
 
     reports_dir = Path(args.reports_dir) if args.reports_dir else Path(__file__).resolve().parent / "reports"
     reports_dir.mkdir(parents=True, exist_ok=True)
     out_path = reports_dir / "universe_scan.csv"
     results.sort_values("return_pct", ascending=False).to_csv(out_path, index=False)
 
-    ranked = results[results.trades >= MIN_TRADES_FOR_RANKING].sort_values("return_pct", ascending=False)
+    ranked = results[results.trades >= args.min_trades].sort_values("return_pct", ascending=False)
 
     pd.set_option("display.width", 160)
     print("=" * 70)
-    print(f"Screened {len(results)} symbols ({(results.trades >= MIN_TRADES_FOR_RANKING).sum()} with >= {MIN_TRADES_FOR_RANKING} trades)")
+    print(f"Screened {len(results)} symbols ({(results.trades >= args.min_trades).sum()} with >= {args.min_trades} trades)")
     print(f"Each symbol sized to ~Rs {args.capital_per_trade:,.0f} notional per trade (see 'qty' column)")
     print(f"Full leaderboard written to {out_path}")
     print("-" * 70)
-    print(f"TOP {args.top} by return % on capital (min {MIN_TRADES_FOR_RANKING} trades):")
+    print(f"TOP {args.top} by return % on capital (min {args.min_trades} trades):")
     print(ranked.head(args.top).to_string(index=False))
     print("-" * 70)
-    print(f"BOTTOM {args.top} by return % on capital (min {MIN_TRADES_FOR_RANKING} trades):")
+    print(f"BOTTOM {args.top} by return % on capital (min {args.min_trades} trades):")
     print(ranked.tail(args.top).to_string(index=False))
     print("=" * 70)
 

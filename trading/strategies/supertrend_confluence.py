@@ -198,9 +198,12 @@ class SupertrendConfluenceEngine(StrategyEngine):
             return signals
 
         # Supertrend flip from up to down is both the stop and the reversal exit.
+        # Fill at the candle's actual close -- NOT self._st_value, which by this point
+        # reflects the *new* (downtrend) band and can sit well above the price that
+        # actually triggered the flip, understating or even inverting the loss.
         if self.position is not None:
             if prev_uptrend and not self._st_uptrend:
-                signals.append(self._close_position(candle.timestamp, self._st_value, "supertrend_reversal"))
+                signals.append(self._close_position(candle.timestamp, candle.close, "supertrend_reversal"))
             return signals
 
         if self._pivot_r1 is None or rsi is None or bb_upper is None or not self._trading_allowed():
