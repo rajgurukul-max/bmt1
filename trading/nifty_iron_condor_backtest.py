@@ -145,18 +145,24 @@ def run_iron_condor(
                     break
 
         if exit_prices is None:
+            # Held to expiry: cash-settled index options settle at INTRINSIC VALUE
+            # against the final settlement price, not at a bhavcopy "close" price.
+            # This is generically more correct (not just a workaround), and it also
+            # sidesteps a real BSE bhavcopy defect where every SENSEX expiry-day row
+            # has ClsPric overwritten with the underlying spot price instead of the
+            # option's own settlement value (verified: 100% of SENSEX expiry rows
+            # have ClsPric == UndrlygPric == SttlmPric, vs 0% on NIFTY and on any
+            # non-expiry day for either index).
             exit_day_df = df[(df["TradDt"] == expiry)]
             if exit_day_df.empty:
                 continue
+            settlement_price = exit_day_df["UndrlygPric"].iloc[0]
             exit_prices = {}
             for name, opt_type, strike, is_buy in legs:
-                match = exit_day_df[(exit_day_df["XpryDt"] == expiry) & (exit_day_df["OptnTp"] == opt_type) & (exit_day_df["StrkPric"] == strike)]
-                if match.empty:
-                    ok = False
-                    break
-                exit_prices[name] = match["ClsPric"].iloc[0]
-            if not ok:
-                continue
+                if opt_type == "CE":
+                    exit_prices[name] = max(0.0, settlement_price - strike)
+                else:
+                    exit_prices[name] = max(0.0, strike - settlement_price)
 
         gross = 0.0
         charges = 0.0
