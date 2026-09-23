@@ -53,7 +53,7 @@ def nearest_strike(strikes: pd.Series, target: float) -> float:
     return strikes.iloc[(strikes - target).abs().argsort().iloc[0]]
 
 
-def run_iron_condor(df: pd.DataFrame) -> pd.DataFrame:
+def run_iron_condor(df: pd.DataFrame, short_offset: float = 200, long_offset: float = 400) -> pd.DataFrame:
     thursdays = sorted(df[df["TradDt"].dt.dayofweek == 3]["TradDt"].unique())
     rows = []
 
@@ -74,10 +74,10 @@ def run_iron_condor(df: pd.DataFrame) -> pd.DataFrame:
         if ce_strikes.empty or pe_strikes.empty:
             continue
 
-        sell_ce_strike = nearest_strike(ce_strikes, cmp_ + 200)
-        buy_ce_strike = nearest_strike(ce_strikes, cmp_ + 400)
-        sell_pe_strike = nearest_strike(pe_strikes, cmp_ - 200)
-        buy_pe_strike = nearest_strike(pe_strikes, cmp_ - 400)
+        sell_ce_strike = nearest_strike(ce_strikes, cmp_ + short_offset)
+        buy_ce_strike = nearest_strike(ce_strikes, cmp_ + long_offset)
+        sell_pe_strike = nearest_strike(pe_strikes, cmp_ - short_offset)
+        buy_pe_strike = nearest_strike(pe_strikes, cmp_ - long_offset)
 
         legs = [
             ("sell_ce", "CE", sell_ce_strike, False),
