@@ -2,15 +2,18 @@
 
 Kite Connect access tokens expire daily. Run this each trading morning:
 
-    python auth.py
+    python auth.py                    # prompts interactively for request_token
+    python auth.py <request_token>    # non-interactive, e.g. when run by an agent
 
 It prints a login URL, you log in in the browser, Zerodha redirects to your
-configured redirect URL with a `request_token` query param — paste that back in
-here, and this script exchanges it for an access token and writes it into `.env`.
+configured redirect URL with a `request_token` query param — pass that back in
+(as the CLI arg, or when prompted), and this script exchanges it for an access
+token and writes it into `.env`.
 """
 from __future__ import annotations
 
 import re
+import sys
 from pathlib import Path
 
 from kiteconnect import KiteConnect
@@ -36,9 +39,12 @@ def main() -> None:
     cfg = load_config()
     kite = KiteConnect(api_key=cfg.zerodha.api_key)
 
-    print("Log in using this URL, then copy the `request_token` from the redirect:")
-    print(kite.login_url())
-    request_token = input("request_token: ").strip()
+    if len(sys.argv) > 1:
+        request_token = sys.argv[1].strip()
+    else:
+        print("Log in using this URL, then copy the `request_token` from the redirect:")
+        print(kite.login_url())
+        request_token = input("request_token: ").strip()
 
     session = kite.generate_session(request_token, api_secret=cfg.zerodha.api_secret)
     access_token = session["access_token"]
