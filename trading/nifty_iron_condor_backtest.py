@@ -53,7 +53,15 @@ def nearest_strike(strikes: pd.Series, target: float) -> float:
     return strikes.iloc[(strikes - target).abs().argsort().iloc[0]]
 
 
-def run_iron_condor(df: pd.DataFrame, short_offset: float = 200, long_offset: float = 400) -> pd.DataFrame:
+def run_iron_condor(
+    df: pd.DataFrame, short_offset: float = 200, long_offset: float = 400,
+    stop_loss_credit_multiple: float | None = None,
+) -> pd.DataFrame:
+    """stop_loss_credit_multiple: if set, exits the WHOLE position (all 4 legs) at
+    the first intervening trading day's close where the mark-to-market loss
+    exceeds this multiple of the net credit received at entry -- e.g. 2.0 means
+    "stop out once you're down 2x the credit collected". None (default) holds to
+    expiry regardless, as in the original spec."""
     thursdays = sorted(df[df["TradDt"].dt.dayofweek == 3]["TradDt"].unique())
     rows = []
 
@@ -97,18 +105,51 @@ def run_iron_condor(df: pd.DataFrame, short_offset: float = 200, long_offset: fl
         if not ok:
             continue
 
-        exit_day_df = df[(df["TradDt"] == expiry)]
-        if exit_day_df.empty:
-            continue
-        exit_prices = {}
-        for name, opt_type, strike, is_buy in legs:
-            match = exit_day_df[(exit_day_df["XpryDt"] == expiry) & (exit_day_df["OptnTp"] == opt_type) & (exit_day_df["StrkPric"] == strike)]
-            if match.empty:
-                ok = False
-                break
-            exit_prices[name] = match["ClsPric"].iloc[0]
-        if not ok:
-            continue
+        net_credit = entry_prices["sell_ce"] + entry_prices["sell_pe"] - entry_prices["buy_ce"] - entry_prices["buy_pe"]
+
+        exit_prices = None
+        exit_reason = "expiry"
+        exit_day = expiry
+
+        if stop_loss_credit_multiple is not None:
+            stop_threshold = -abs(stop_loss_credit_multiple) * net_credit * lot_size
+            interim_days = sorted(d for d in df["TradDt"].unique() if entry_date < d < expiry)
+            for d in interim_days:
+                day_check_df = df[df["TradDt"] == d]
+                if day_check_df.empty:
+                    continue
+                check_prices, complete = {}, True
+                for name, opt_type, strike, is_buy in legs:
+                    match = day_check_df[(day_check_df["XpryDt"] == expiry) & (day_check_df["OptnTp"] == opt_type) & (day_check_df["StrkPric"] == strike)]
+                    if match.empty:
+                        complete = False
+                        break
+                    check_prices[name] = match["ClsPric"].iloc[0]
+                if not complete:
+                    continue
+                mtm = sum(
+                    (check_prices[name] - entry_prices[name]) * (1 if is_buy else -1) * lot_size
+                    for name, opt_type, strike, is_buy in legs
+                )
+                if mtm <= stop_threshold:
+                    exit_prices = check_prices
+                    exit_reason = "stop_loss"
+                    exit_day = d
+                    break
+
+        if exit_prices is None:
+            exit_day_df = df[(df["TradDt"] == expiry)]
+            if exit_day_df.empty:
+                continue
+            exit_prices = {}
+            for name, opt_type, strike, is_buy in legs:
+                match = exit_day_df[(exit_day_df["XpryDt"] == expiry) & (exit_day_df["OptnTp"] == opt_type) & (exit_day_df["StrkPric"] == strike)]
+                if match.empty:
+                    ok = False
+                    break
+                exit_prices[name] = match["ClsPric"].iloc[0]
+            if not ok:
+                continue
 
         gross = 0.0
         charges = 0.0
@@ -118,10 +159,9 @@ def run_iron_condor(df: pd.DataFrame, short_offset: float = 200, long_offset: fl
             gross += (exit_p - entry_p) * sign * lot_size
             charges += leg_charges(entry_p, lot_size, is_buy) + leg_charges(exit_p, lot_size, is_buy)
 
-        net_credit = entry_prices["sell_ce"] + entry_prices["sell_pe"] - entry_prices["buy_ce"] - entry_prices["buy_pe"]
-
         rows.append({
-            "entry_date": entry_date, "expiry": expiry, "cmp": cmp_, "lot_size": lot_size,
+            "entry_date": entry_date, "expiry": expiry, "exit_day": exit_day, "exit_reason": exit_reason,
+            "cmp": cmp_, "lot_size": lot_size,
             "sell_ce": sell_ce_strike, "buy_ce": buy_ce_strike,
             "sell_pe": sell_pe_strike, "buy_pe": buy_pe_strike,
             "net_credit_per_share": net_credit,
