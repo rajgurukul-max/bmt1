@@ -6,3 +6,4 @@ logs/
 reports/
 KILL_SWITCH
 live_range_trade_state.json
+nifty_condor_state*.json
