@@ -57,8 +57,14 @@ def run_iron_condor(
     df: pd.DataFrame, short_offset: float = 200, long_offset: float = 400,
     stop_loss_credit_multiple: float | None = None, entry_weekday: int | None = 3,
     days_to_expiry: int | None = None, pct_offsets: bool = False,
+    sides: tuple[str, ...] = ("CE", "PE"),
 ) -> pd.DataFrame:
-    """pct_offsets: if True, short_offset/long_offset are read as PERCENT of that
+    """sides: which vertical spreads to run -- ("CE", "PE") for the full 4-leg
+    iron condor (default), ("CE",) for a call-credit-spread only (sell_ce/buy_ce),
+    or ("PE",) for a put-credit-spread only. Useful for isolating which side of
+    a condor was actually carrying the edge (or the risk).
+
+    pct_offsets: if True, short_offset/long_offset are read as PERCENT of that
     day's CMP instead of literal index points (e.g. short_offset=0.82 means
     0.82% OTM). Needed for anything whose price level isn't stable like Nifty's
     -- a single stock's price can drift or jump on a split/bonus within the
@@ -113,22 +119,21 @@ def run_iron_condor(
 
         ce_strikes = day_df[(day_df["XpryDt"] == expiry) & (day_df["OptnTp"] == "CE")]["StrkPric"]
         pe_strikes = day_df[(day_df["XpryDt"] == expiry) & (day_df["OptnTp"] == "PE")]["StrkPric"]
-        if ce_strikes.empty or pe_strikes.empty:
+        if ("CE" in sides and ce_strikes.empty) or ("PE" in sides and pe_strikes.empty):
             continue
 
         short_pts = cmp_ * short_offset / 100.0 if pct_offsets else short_offset
         long_pts = cmp_ * long_offset / 100.0 if pct_offsets else long_offset
-        sell_ce_strike = nearest_strike(ce_strikes, cmp_ + short_pts)
-        buy_ce_strike = nearest_strike(ce_strikes, cmp_ + long_pts)
-        sell_pe_strike = nearest_strike(pe_strikes, cmp_ - short_pts)
-        buy_pe_strike = nearest_strike(pe_strikes, cmp_ - long_pts)
 
-        legs = [
-            ("sell_ce", "CE", sell_ce_strike, False),
-            ("buy_ce", "CE", buy_ce_strike, True),
-            ("sell_pe", "PE", sell_pe_strike, False),
-            ("buy_pe", "PE", buy_pe_strike, True),
-        ]
+        legs = []
+        if "CE" in sides:
+            sell_ce_strike = nearest_strike(ce_strikes, cmp_ + short_pts)
+            buy_ce_strike = nearest_strike(ce_strikes, cmp_ + long_pts)
+            legs += [("sell_ce", "CE", sell_ce_strike, False), ("buy_ce", "CE", buy_ce_strike, True)]
+        if "PE" in sides:
+            sell_pe_strike = nearest_strike(pe_strikes, cmp_ - short_pts)
+            buy_pe_strike = nearest_strike(pe_strikes, cmp_ - long_pts)
+            legs += [("sell_pe", "PE", sell_pe_strike, False), ("buy_pe", "PE", buy_pe_strike, True)]
 
         entry_prices = {}
         ok = True
@@ -141,7 +146,7 @@ def run_iron_condor(
         if not ok:
             continue
 
-        net_credit = entry_prices["sell_ce"] + entry_prices["sell_pe"] - entry_prices["buy_ce"] - entry_prices["buy_pe"]
+        net_credit = sum(entry_prices[name] * (-1 if is_buy else 1) for name, _, _, is_buy in legs)
 
         exit_prices = None
         exit_reason = "expiry"
@@ -201,11 +206,11 @@ def run_iron_condor(
             gross += (exit_p - entry_p) * sign * lot_size
             charges += leg_charges(entry_p, lot_size, is_buy) + leg_charges(exit_p, lot_size, is_buy)
 
+        strikes = {name: strike for name, _, strike, _ in legs}
         rows.append({
             "entry_date": entry_date, "expiry": expiry, "exit_day": exit_day, "exit_reason": exit_reason,
             "cmp": cmp_, "lot_size": lot_size,
-            "sell_ce": sell_ce_strike, "buy_ce": buy_ce_strike,
-            "sell_pe": sell_pe_strike, "buy_pe": buy_pe_strike,
+            **strikes,
             "net_credit_per_share": net_credit,
             "gross_pnl": gross, "charges": charges, "net_pnl": gross - charges,
         })
