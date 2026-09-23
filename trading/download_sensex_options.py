@@ -55,30 +55,45 @@ def main():
     end = pd.Timestamp(args.end) if args.end else pd.Timestamp.today().normalize()
     start = pd.Timestamp(args.start) if args.start else end - pd.Timedelta(days=730)
 
+    CACHE_PATH.parent.mkdir(exist_ok=True)
+
+    done_dates: set[pd.Timestamp] = set()
+    if CACHE_PATH.exists():
+        existing = pd.read_csv(CACHE_PATH, parse_dates=["TradDt"])
+        done_dates = set(existing["TradDt"].unique())
+        print(f"Resuming: {len(done_dates)} days already cached", file=sys.stderr)
+
     all_days = pd.bdate_range(start, end)
+    todo = [d for d in all_days if d not in done_dates]
+    print(f"{len(todo)} of {len(all_days)} days remain to fetch", file=sys.stderr)
+
     frames = []
-    ok, empty, fail = 0, 0, 0
-    for i, d in enumerate(all_days):
+    ok, empty = 0, 0
+    header_written = CACHE_PATH.exists()
+    for i, d in enumerate(todo):
         df = fetch_day(d)
         if df is None:
             empty += 1
         else:
             frames.append(df)
             ok += 1
-        if (i + 1) % 25 == 0:
-            print(f"  ...{i+1}/{len(all_days)} days processed (ok={ok}, empty={empty})", file=sys.stderr)
+        if len(frames) >= 25 or (i == len(todo) - 1 and frames):
+            chunk = pd.concat(frames, ignore_index=True)
+            chunk["TradDt"] = pd.to_datetime(chunk["TradDt"])
+            chunk["XpryDt"] = pd.to_datetime(chunk["XpryDt"])
+            chunk.to_csv(CACHE_PATH, mode="a", header=not header_written, index=False)
+            header_written = True
+            frames = []
+        if (i + 1) % 25 == 0 or i == len(todo) - 1:
+            print(f"  ...{i+1}/{len(todo)} days fetched (ok={ok}, empty={empty})", file=sys.stderr)
         time.sleep(0.15)
 
-    if not frames:
+    if not header_written:
         print("No data downloaded.", file=sys.stderr)
         sys.exit(1)
 
-    combined = pd.concat(frames, ignore_index=True)
-    combined["TradDt"] = pd.to_datetime(combined["TradDt"])
-    combined["XpryDt"] = pd.to_datetime(combined["XpryDt"])
-    CACHE_PATH.parent.mkdir(exist_ok=True)
-    combined.to_csv(CACHE_PATH, index=False)
-    print(f"Saved {len(combined)} rows across {combined['TradDt'].nunique()} trading days to {CACHE_PATH}")
+    final = pd.read_csv(CACHE_PATH, parse_dates=["TradDt"])
+    print(f"Saved {len(final)} rows across {final['TradDt'].nunique()} trading days to {CACHE_PATH}")
 
 
 if __name__ == "__main__":
