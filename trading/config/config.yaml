@@ -9,7 +9,7 @@ zerodha:
 instrument:
   symbol: ANGELONE
   exchange: NSE
-  quantity: 1000
+  quantity: 50               # pilot size for live_trader.py; raise once live results look sane
 
 data:
   interval: 5minute          # kiteconnect historical_data interval
@@ -24,7 +24,7 @@ market:
   close_time: "15:30"
   square_off_time: "15:10"   # exit all open intraday positions by this time
 
-active_strategy: orb
+active_strategy: supertrend_confluence
 
 strategies:
   orb:
@@ -102,7 +102,10 @@ costs:
   slippage_pct: 0.05         # adverse slippage applied to every simulated fill
 
 risk:
-  max_daily_loss: 3000       # hard rupee stop for the day (realized + unrealized)
+  # Backtested avg loss per trade was ~Rs 1,069-2,900 at qty=1000, i.e. ~Rs 53-145 at
+  # this pilot qty=50 -- 500 gives room for a few normal losing trades before halting,
+  # without being so loose it stops meaning anything. Revisit when qty is raised.
+  max_daily_loss: 500        # hard rupee stop for the day (realized + unrealized)
   kill_switch_file: KILL_SWITCH  # touch this file to manually halt trading immediately
 
 logging:
