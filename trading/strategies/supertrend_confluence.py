@@ -47,6 +47,7 @@ class SupertrendConfluenceEngine(StrategyEngine):
         super().__init__(params, qty, market_cfg)
 
         self.square_off_t = _parse_time(market_cfg.square_off_time)
+        self.entry_start_t = _parse_time(params.get("entry_start_time", market_cfg.open_time))
 
         self.direction = params.get("direction", "long")
         if self.direction not in ("long", "short"):
@@ -231,6 +232,8 @@ class SupertrendConfluenceEngine(StrategyEngine):
                 signals.append(exit_sig)
             return signals
 
+        if t < self.entry_start_t:
+            return signals
         if rsi is None or not self._trading_allowed():
             return signals
         pivot_level = self._pivot_r1 if self.direction == "long" else self._pivot_s1

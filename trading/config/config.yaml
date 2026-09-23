@@ -76,6 +76,9 @@ strategies:
     bb_std: 2.0
     near_pct: 0.3          # how close price must be to pivot R1 / BB upper band, in %
     one_trade_per_day: false
+    entry_start_time: "09:30"  # skip the noisy opening 15 min -- validated improvement,
+                                # a genuine smooth peak at 09:30 (not an isolated spike),
+                                # full-year P&L +Rs 23,736 -> +Rs 37,712 on ANGELONE
 
   vwap_reversion:
     band_pct: 1.0              # min %-distance from VWAP to trigger a fade entry
