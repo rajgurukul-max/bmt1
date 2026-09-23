@@ -56,9 +56,17 @@ def nearest_strike(strikes: pd.Series, target: float) -> float:
 def run_iron_condor(
     df: pd.DataFrame, short_offset: float = 200, long_offset: float = 400,
     stop_loss_credit_multiple: float | None = None, entry_weekday: int | None = 3,
-    days_to_expiry: int | None = None,
+    days_to_expiry: int | None = None, pct_offsets: bool = False,
 ) -> pd.DataFrame:
-    """stop_loss_credit_multiple: if set, exits the WHOLE position (all 4 legs) at
+    """pct_offsets: if True, short_offset/long_offset are read as PERCENT of that
+    day's CMP instead of literal index points (e.g. short_offset=0.82 means
+    0.82% OTM). Needed for anything whose price level isn't stable like Nifty's
+    -- a single stock's price can drift or jump on a split/bonus within the
+    backtest window (verified: RELIANCE roughly halved mid-window on a 1:1
+    bonus issue), so a fixed point offset would silently mean a different %
+    OTM before and after. Percent offsets stay correct through that.
+
+    stop_loss_credit_multiple: if set, exits the WHOLE position (all 4 legs) at
     the first intervening trading day's close where the mark-to-market loss
     exceeds this multiple of the net credit received at entry -- e.g. 2.0 means
     "stop out once you're down 2x the credit collected". None (default) holds to
@@ -108,10 +116,12 @@ def run_iron_condor(
         if ce_strikes.empty or pe_strikes.empty:
             continue
 
-        sell_ce_strike = nearest_strike(ce_strikes, cmp_ + short_offset)
-        buy_ce_strike = nearest_strike(ce_strikes, cmp_ + long_offset)
-        sell_pe_strike = nearest_strike(pe_strikes, cmp_ - short_offset)
-        buy_pe_strike = nearest_strike(pe_strikes, cmp_ - long_offset)
+        short_pts = cmp_ * short_offset / 100.0 if pct_offsets else short_offset
+        long_pts = cmp_ * long_offset / 100.0 if pct_offsets else long_offset
+        sell_ce_strike = nearest_strike(ce_strikes, cmp_ + short_pts)
+        buy_ce_strike = nearest_strike(ce_strikes, cmp_ + long_pts)
+        sell_pe_strike = nearest_strike(pe_strikes, cmp_ - short_pts)
+        buy_pe_strike = nearest_strike(pe_strikes, cmp_ - long_pts)
 
         legs = [
             ("sell_ce", "CE", sell_ce_strike, False),
