@@ -55,17 +55,24 @@ def nearest_strike(strikes: pd.Series, target: float) -> float:
 
 def run_iron_condor(
     df: pd.DataFrame, short_offset: float = 200, long_offset: float = 400,
-    stop_loss_credit_multiple: float | None = None,
+    stop_loss_credit_multiple: float | None = None, entry_weekday: int = 3,
 ) -> pd.DataFrame:
     """stop_loss_credit_multiple: if set, exits the WHOLE position (all 4 legs) at
     the first intervening trading day's close where the mark-to-market loss
     exceeds this multiple of the net credit received at entry -- e.g. 2.0 means
     "stop out once you're down 2x the credit collected". None (default) holds to
-    expiry regardless, as in the original spec."""
-    thursdays = sorted(df[df["TradDt"].dt.dayofweek == 3]["TradDt"].unique())
+    expiry regardless, as in the original spec.
+
+    entry_weekday: 0=Monday .. 4=Friday (default 3=Thursday, the original spec).
+    The exit is always the nearest FUTURE weekly Tuesday expiry found in the data,
+    so entry_weekday=0 (Monday) lands on the SAME week's Tuesday -- a ~1-day hold
+    -- while 2/3/4 (Wed/Thu/Fri) land on the FOLLOWING week's Tuesday, a 4-6 day
+    hold. These are not directly comparable holding periods; that difference is
+    exactly what a same-vs-next-week entry-day sweep needs to account for."""
+    entry_days = sorted(df[df["TradDt"].dt.dayofweek == entry_weekday]["TradDt"].unique())
     rows = []
 
-    for entry_date in thursdays:
+    for entry_date in entry_days:
         day_df = df[df["TradDt"] == entry_date]
         if day_df.empty:
             continue
