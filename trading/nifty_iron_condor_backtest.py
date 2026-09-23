@@ -55,7 +55,8 @@ def nearest_strike(strikes: pd.Series, target: float) -> float:
 
 def run_iron_condor(
     df: pd.DataFrame, short_offset: float = 200, long_offset: float = 400,
-    stop_loss_credit_multiple: float | None = None, entry_weekday: int = 3,
+    stop_loss_credit_multiple: float | None = None, entry_weekday: int | None = 3,
+    days_to_expiry: int | None = None,
 ) -> pd.DataFrame:
     """stop_loss_credit_multiple: if set, exits the WHOLE position (all 4 legs) at
     the first intervening trading day's close where the mark-to-market loss
@@ -64,12 +65,30 @@ def run_iron_condor(
     expiry regardless, as in the original spec.
 
     entry_weekday: 0=Monday .. 4=Friday (default 3=Thursday, the original spec).
-    The exit is always the nearest FUTURE weekly Tuesday expiry found in the data,
-    so entry_weekday=0 (Monday) lands on the SAME week's Tuesday -- a ~1-day hold
-    -- while 2/3/4 (Wed/Thu/Fri) land on the FOLLOWING week's Tuesday, a 4-6 day
-    hold. These are not directly comparable holding periods; that difference is
-    exactly what a same-vs-next-week entry-day sweep needs to account for."""
-    entry_days = sorted(df[df["TradDt"].dt.dayofweek == entry_weekday]["TradDt"].unique())
+    The exit is always the nearest FUTURE expiry found in the data, so
+    entry_weekday=0 (Monday) lands on the SAME week's expiry -- a short hold --
+    while later weekdays land on the FOLLOWING week's expiry, a longer hold.
+    Ignored if days_to_expiry is set.
+
+    days_to_expiry: if set, overrides entry_weekday entirely and instead selects
+    every trading day whose nearest future expiry falls EXACTLY this many
+    calendar days later -- e.g. 4 reproduces Nifty's winning "Friday entry,
+    following Tuesday expiry" gap (Fri -> Tue is 4 calendar days) but does so by
+    the actual entry-to-expiry gap rather than a fixed weekday name. This matters
+    when the underlying's own expiry weekday isn't stable across the backtest
+    window (e.g. Sensex has used Friday, Tuesday, and Thursday expiries within
+    the same 2-year span) -- a fixed weekday can silently land on a different
+    holding period depending on which regime was in force that week, whereas a
+    fixed days-to-expiry filter reproduces the same gap regardless of regime."""
+    if days_to_expiry is not None:
+        entry_days = []
+        for d in sorted(df["TradDt"].unique()):
+            day_df = df[df["TradDt"] == d]
+            future_expiries = sorted(e for e in day_df["XpryDt"].unique() if e > d)
+            if future_expiries and (future_expiries[0] - d).days == days_to_expiry:
+                entry_days.append(d)
+    else:
+        entry_days = sorted(df[df["TradDt"].dt.dayofweek == entry_weekday]["TradDt"].unique())
     rows = []
 
     for entry_date in entry_days:
