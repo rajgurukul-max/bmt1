@@ -58,8 +58,18 @@ def run_iron_condor(
     stop_loss_credit_multiple: float | None = None, entry_weekday: int | None = 3,
     days_to_expiry: int | None = None, pct_offsets: bool = False,
     sides: tuple[str, ...] = ("CE", "PE"),
+    enter_prior_close: bool = False,
 ) -> pd.DataFrame:
-    """sides: which vertical spreads to run -- ("CE", "PE") for the full 4-leg
+    """enter_prior_close: if True, each selected signal day (e.g. a Friday) is
+    entered at the PREVIOUS trading day's close instead of its own close, while
+    still targeting the expiry the signal day would have targeted (nearest
+    expiry strictly after the signal day). Bhavcopy has no intraday prices, so
+    this is the closest real traded proxy for a signal-day morning entry: the
+    prior close sits just before the next open, rather than ~6 hours after it.
+    Self-adjusts across expiry regimes -- in a Thursday-expiry week the prior
+    day IS expiry day, and the expiring contract is skipped automatically.
+
+    sides: which vertical spreads to run -- ("CE", "PE") for the full 4-leg
     iron condor (default), ("CE",) for a call-credit-spread only (sell_ce/buy_ce),
     or ("PE",) for a put-credit-spread only. Useful for isolating which side of
     a condor was actually carrying the edge (or the risk).
@@ -103,19 +113,26 @@ def run_iron_condor(
                 entry_days.append(d)
     else:
         entry_days = sorted(df[df["TradDt"].dt.dayofweek == entry_weekday]["TradDt"].unique())
+
+    all_days = sorted(df["TradDt"].unique())
+    if enter_prior_close:
+        day_index = {d: i for i, d in enumerate(all_days)}
+        schedule = [(all_days[day_index[d] - 1], d) for d in entry_days if day_index[d] > 0]
+    else:
+        schedule = [(d, d) for d in entry_days]
     rows = []
 
-    for entry_date in entry_days:
+    for entry_date, signal_date in schedule:
         day_df = df[df["TradDt"] == entry_date]
         if day_df.empty:
             continue
         cmp_ = day_df["UndrlygPric"].iloc[0]
         lot_size = int(day_df["NewBrdLotQty"].iloc[0])
 
-        future_expiries = sorted(e for e in day_df["XpryDt"].unique() if e > entry_date)
+        future_expiries = sorted(e for e in day_df["XpryDt"].unique() if e > signal_date)
         if not future_expiries:
             continue
-        expiry = future_expiries[0]  # nearest weekly expiry
+        expiry = future_expiries[0]  # nearest weekly expiry after the signal day
 
         ce_strikes = day_df[(day_df["XpryDt"] == expiry) & (day_df["OptnTp"] == "CE")]["StrkPric"]
         pe_strikes = day_df[(day_df["XpryDt"] == expiry) & (day_df["OptnTp"] == "PE")]["StrkPric"]
