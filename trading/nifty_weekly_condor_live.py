@@ -339,7 +339,7 @@ def main() -> None:
 
     kite = get_kite_client(cfg)
     today = date.today()
-    state = load_state()
+    state = load_state(args.dry_run)
 
     if args.action != "auto":
         {"enter": enter_position, "check": lambda k, d: check_and_maybe_stop(k, d),
