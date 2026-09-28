@@ -59,8 +59,19 @@ def run_iron_condor(
     days_to_expiry: int | None = None, pct_offsets: bool = False,
     sides: tuple[str, ...] = ("CE", "PE"),
     enter_prior_close: bool = False,
+    put_short_offset: float | None = None, put_long_offset: float | None = None,
+    breach_exit_sides: tuple[str, ...] = (),
 ) -> pd.DataFrame:
-    """enter_prior_close: if True, each selected signal day (e.g. a Friday) is
+    """put_short_offset / put_long_offset: put-wing distances from CMP, same units
+    as short_offset/long_offset. None (default) mirrors the call side, i.e. a
+    symmetric condor. Set wider to push the put side further out of the money.
+
+    breach_exit_sides: e.g. ("PE",) closes that side's whole vertical spread at
+    the first interim daily close where spot has crossed its short strike (below
+    the short PE / above the short CE); the other side keeps running. Daily
+    closes only -- an intraday touch that recovers by the close isn't seen.
+
+    enter_prior_close: if True, each selected signal day (e.g. a Friday) is
     entered at the PREVIOUS trading day's close instead of its own close, while
     still targeting the expiry the signal day would have targeted (nearest
     expiry strictly after the signal day). Bhavcopy has no intraday prices, so
@@ -139,8 +150,12 @@ def run_iron_condor(
         if ("CE" in sides and ce_strikes.empty) or ("PE" in sides and pe_strikes.empty):
             continue
 
-        short_pts = cmp_ * short_offset / 100.0 if pct_offsets else short_offset
-        long_pts = cmp_ * long_offset / 100.0 if pct_offsets else long_offset
+        def to_pts(offset: float) -> float:
+            return cmp_ * offset / 100.0 if pct_offsets else offset
+
+        short_pts, long_pts = to_pts(short_offset), to_pts(long_offset)
+        put_short_pts = short_pts if put_short_offset is None else to_pts(put_short_offset)
+        put_long_pts = long_pts if put_long_offset is None else to_pts(put_long_offset)
 
         legs = []
         if "CE" in sides:
@@ -148,9 +163,10 @@ def run_iron_condor(
             buy_ce_strike = nearest_strike(ce_strikes, cmp_ + long_pts)
             legs += [("sell_ce", "CE", sell_ce_strike, False), ("buy_ce", "CE", buy_ce_strike, True)]
         if "PE" in sides:
-            sell_pe_strike = nearest_strike(pe_strikes, cmp_ - short_pts)
-            buy_pe_strike = nearest_strike(pe_strikes, cmp_ - long_pts)
+            sell_pe_strike = nearest_strike(pe_strikes, cmp_ - put_short_pts)
+            buy_pe_strike = nearest_strike(pe_strikes, cmp_ - put_long_pts)
             legs += [("sell_pe", "PE", sell_pe_strike, False), ("buy_pe", "PE", buy_pe_strike, True)]
+        strike_of = {name: strike for name, _, strike, _ in legs}
 
         entry_prices = {}
         ok = True
@@ -165,12 +181,17 @@ def run_iron_condor(
 
         net_credit = sum(entry_prices[name] * (-1 if is_buy else 1) for name, _, _, is_buy in legs)
 
-        exit_prices = None
+        exit_prices = {}
         exit_reason = "expiry"
         exit_day = expiry
+        open_names = {name for name, _, _, _ in legs}
+        breached = []
 
-        if stop_loss_credit_multiple is not None:
-            stop_threshold = -abs(stop_loss_credit_multiple) * net_credit * lot_size
+        if stop_loss_credit_multiple is not None or breach_exit_sides:
+            stop_threshold = (
+                -abs(stop_loss_credit_multiple) * net_credit * lot_size
+                if stop_loss_credit_multiple is not None else None
+            )
             interim_days = sorted(d for d in df["TradDt"].unique() if entry_date < d < expiry)
             for d in interim_days:
                 day_check_df = df[df["TradDt"] == d]
@@ -178,6 +199,8 @@ def run_iron_condor(
                     continue
                 check_prices, complete = {}, True
                 for name, opt_type, strike, is_buy in legs:
+                    if name not in open_names:
+                        continue
                     match = day_check_df[(day_check_df["XpryDt"] == expiry) & (day_check_df["OptnTp"] == opt_type) & (day_check_df["StrkPric"] == strike)]
                     if match.empty:
                         complete = False
@@ -185,17 +208,41 @@ def run_iron_condor(
                     check_prices[name] = match["ClsPric"].iloc[0]
                 if not complete:
                     continue
-                mtm = sum(
-                    (check_prices[name] - entry_prices[name]) * (1 if is_buy else -1) * lot_size
-                    for name, opt_type, strike, is_buy in legs
-                )
-                if mtm <= stop_threshold:
-                    exit_prices = check_prices
-                    exit_reason = "stop_loss"
-                    exit_day = d
+
+                spot = day_check_df["UndrlygPric"].iloc[0]
+                for side in breach_exit_sides:
+                    short_name = "sell_ce" if side == "CE" else "sell_pe"
+                    if short_name not in open_names:
+                        continue
+                    crossed = spot > strike_of[short_name] if side == "CE" else spot < strike_of[short_name]
+                    if crossed:
+                        for name, opt_type, _, _ in legs:
+                            if opt_type == side and name in open_names:
+                                exit_prices[name] = check_prices[name]
+                                open_names.discard(name)
+                        breached.append(side)
+                        exit_day = d
+                if not open_names:
                     break
 
-        if exit_prices is None:
+                if stop_threshold is not None:
+                    mtm = sum(
+                        (exit_prices.get(name, check_prices.get(name)) - entry_prices[name]) * (1 if is_buy else -1) * lot_size
+                        for name, _, _, is_buy in legs
+                    )
+                    if mtm <= stop_threshold:
+                        for name in open_names:
+                            exit_prices[name] = check_prices[name]
+                        open_names.clear()
+                        exit_reason = "stop_loss"
+                        exit_day = d
+                        break
+
+        if breached and exit_reason == "expiry":
+            exit_reason = "+".join(breached) + "_breach"
+
+        if open_names:
+            exit_day = expiry
             # Held to expiry: cash-settled index options settle at INTRINSIC VALUE
             # against the final settlement price, not at a bhavcopy "close" price.
             # This is generically more correct (not just a workaround), and it also
@@ -208,8 +255,9 @@ def run_iron_condor(
             if exit_day_df.empty:
                 continue
             settlement_price = exit_day_df["UndrlygPric"].iloc[0]
-            exit_prices = {}
             for name, opt_type, strike, is_buy in legs:
+                if name not in open_names:
+                    continue
                 if opt_type == "CE":
                     exit_prices[name] = max(0.0, settlement_price - strike)
                 else:
