@@ -62,8 +62,14 @@ def run_iron_condor(
     put_short_offset: float | None = None, put_long_offset: float | None = None,
     breach_exit_sides: tuple[str, ...] = (),
     explicit_schedule: list[tuple[pd.Timestamp, pd.Timestamp]] | None = None,
+    stop_loss_amount: float | None = None,
 ) -> pd.DataFrame:
-    """explicit_schedule: list of (entry_date, expiry) pairs to trade exactly,
+    """stop_loss_amount: fixed rupee stop, in the same units as net_pnl (one lot,
+    i.e. qty = lot_size), e.g. 5000 for a Rs 25k stop at 5 lots. Checked at daily
+    closes like the credit-multiple stop; if both are set the tighter one wins.
+    The exit is at that close, so a gap day can realize well past the limit.
+
+    explicit_schedule: list of (entry_date, expiry) pairs to trade exactly,
     overriding entry_weekday/days_to_expiry/enter_prior_close. Needed when the
     target isn't simply "nearest expiry", e.g. N days before each MONTHLY expiry
     while weekly contracts are still listed alongside it.
@@ -200,11 +206,13 @@ def run_iron_condor(
         open_names = {name for name, _, _, _ in legs}
         breached = []
 
-        if stop_loss_credit_multiple is not None or breach_exit_sides:
-            stop_threshold = (
-                -abs(stop_loss_credit_multiple) * net_credit * lot_size
-                if stop_loss_credit_multiple is not None else None
-            )
+        if stop_loss_credit_multiple is not None or stop_loss_amount is not None or breach_exit_sides:
+            thresholds = []
+            if stop_loss_credit_multiple is not None:
+                thresholds.append(-abs(stop_loss_credit_multiple) * net_credit * lot_size)
+            if stop_loss_amount is not None:
+                thresholds.append(-abs(stop_loss_amount))
+            stop_threshold = max(thresholds) if thresholds else None
             interim_days = sorted(d for d in df["TradDt"].unique() if entry_date < d < expiry)
             for d in interim_days:
                 day_check_df = df[df["TradDt"] == d]
