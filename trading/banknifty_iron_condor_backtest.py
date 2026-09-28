@@ -5,6 +5,11 @@ were discontinued in Nov 2024), held to expiry with an optional mid-week stop.
 net (Rs 5.18L vs 3.07L over 2y, 5 lots) at the cost of a deeper drawdown
 (-Rs 1.73L vs -0.99L) and worst month (-Rs 1.12L vs -0.69L).
 
+Final stop: fixed Rs 25k loss on the whole 5-lot position, replacing the 1.0x
+credit stop (Rs 5.37L net, max drawdown -Rs 82k vs -Rs 1.73L). The backtest
+checks it at daily closes, so stopped trades realize -Rs 30k to -58k on gap
+days; a live version should monitor intraday, expiry day included.
+
 Entry day = latest trading day at least 15 calendar days before the monthly
 expiry. Monthly expiry = last expiry date within each calendar month (the
 early months of the data still list weekly contracts alongside it).
@@ -26,6 +31,7 @@ SHORT_OFFSET = 1000
 LONG_OFFSET = 2500
 DAYS_BEFORE = 15
 LOTS = 5
+STOP_LOSS_RUPEES = 25000  # whole position (all LOTS)
 
 
 def monthly_schedule(df: pd.DataFrame, days_before: int) -> list[tuple[pd.Timestamp, pd.Timestamp]]:
@@ -54,10 +60,13 @@ def main():
     end = df["TradDt"].max()
     windows = {"6m": end - pd.Timedelta(days=182), "1y": end - pd.Timedelta(days=365), "2y": df["TradDt"].min()}
 
-    for label, sl in [("1.0x stop", 1.0), ("no stop", None)]:
-        res = run_iron_condor(
-            df, SHORT_OFFSET, LONG_OFFSET, stop_loss_credit_multiple=sl, explicit_schedule=schedule,
-        )
+    variants = [
+        (f"Rs {STOP_LOSS_RUPEES // 1000}k stop (final)", dict(stop_loss_amount=STOP_LOSS_RUPEES / LOTS)),
+        ("1.0x credit stop", dict(stop_loss_credit_multiple=1.0)),
+        ("no stop", dict()),
+    ]
+    for i, (label, kw) in enumerate(variants):
+        res = run_iron_condor(df, SHORT_OFFSET, LONG_OFFSET, explicit_schedule=schedule, **kw)
         print(f"\n=== {SHORT_OFFSET}/{LONG_OFFSET}, {DAYS_BEFORE}d before monthly expiry, {label}, {LOTS} lots ===")
         for w, start in windows.items():
             r = res[res["entry_date"] >= start]
@@ -66,7 +75,7 @@ def main():
                 f"win={(r['net_pnl'] > 0).mean() * 100:5.1f}%  max_dd=Rs {max_drawdown(r):>10,.0f}  "
                 f"worst=Rs {r['net_pnl'].min() * LOTS:>9,.0f}"
             )
-        if sl == 1.0:
+        if i == 0:
             show = res[["entry_date", "expiry", "exit_reason", "cmp", "lot_size", "net_credit_per_share", "net_pnl"]].copy()
             show["net_pnl_5lots"] = (show.pop("net_pnl") * LOTS).round(0)
             show["net_credit_per_share"] = show["net_credit_per_share"].round(1)
