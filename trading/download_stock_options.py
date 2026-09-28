@@ -29,7 +29,7 @@ URL_TMPL = (
 )
 
 
-def fetch_day(date: pd.Timestamp, symbol: str) -> pd.DataFrame | None:
+def fetch_day(date: pd.Timestamp, symbol: str, instr_type: str = "STO") -> pd.DataFrame | None:
     url = URL_TMPL.format(yyyy=date.strftime("%Y"), mm=date.strftime("%m"), date=date.strftime("%Y%m%d"))
     try:
         resp = requests.get(url, timeout=20)
@@ -44,7 +44,7 @@ def fetch_day(date: pd.Timestamp, symbol: str) -> pd.DataFrame | None:
                 df = pd.read_csv(fh)
     except (zipfile.BadZipFile, IndexError):
         return None
-    df = df[(df["TckrSymb"] == symbol) & (df["FinInstrmTp"] == "STO")]
+    df = df[(df["TckrSymb"] == symbol) & (df["FinInstrmTp"] == instr_type)]
     if df.empty:
         return None
     return df
@@ -55,8 +55,10 @@ def main():
     ap.add_argument("symbol", help="NSE stock symbol, e.g. RELIANCE")
     ap.add_argument("--start", default=None, help="YYYY-MM-DD, default = 2 years ago")
     ap.add_argument("--end", default=None, help="YYYY-MM-DD, default = today")
+    ap.add_argument("--index", action="store_true", help="index options (FinInstrmTp=IDO), e.g. BANKNIFTY")
     args = ap.parse_args()
     symbol = args.symbol.upper()
+    instr_type = "IDO" if args.index else "STO"
 
     cache_path = Path(f"data_cache/{symbol}_OPTIONS_bhavcopy.csv")
 
@@ -79,7 +81,7 @@ def main():
     ok, empty = 0, 0
     header_written = cache_path.exists()
     for i, d in enumerate(todo):
-        df = fetch_day(d, symbol)
+        df = fetch_day(d, symbol, instr_type)
         if df is None:
             empty += 1
         else:
