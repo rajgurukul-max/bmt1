@@ -1,6 +1,9 @@
-"""BankNifty monthly Iron Condor: sell CE/PE 1500 pts OTM, buy CE/PE 2500 pts
+"""BankNifty monthly Iron Condor: sell CE/PE 1000 pts OTM, buy CE/PE 2500 pts
 OTM, entered ~15 calendar days before each MONTHLY expiry (BankNifty weeklies
 were discontinued in Nov 2024), held to expiry with an optional mid-week stop.
+1000/2500 chosen over the original 1500/2500 after banknifty_sweep.py: higher
+net (Rs 5.18L vs 3.07L over 2y, 5 lots) at the cost of a deeper drawdown
+(-Rs 1.73L vs -0.99L) and worst month (-Rs 1.12L vs -0.69L).
 
 Entry day = latest trading day at least 15 calendar days before the monthly
 expiry. Monthly expiry = last expiry date within each calendar month (the
@@ -19,7 +22,7 @@ import pandas as pd
 from nifty_iron_condor_backtest import run_iron_condor
 
 DATA_PATH = "data_cache/BANKNIFTY_OPTIONS_bhavcopy.csv"
-SHORT_OFFSET = 1500
+SHORT_OFFSET = 1000
 LONG_OFFSET = 2500
 DAYS_BEFORE = 15
 LOTS = 5
