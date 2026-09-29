@@ -191,3 +191,104 @@ it to run unattended.
 - If you ever change VPS or the VPS gets a new IP for any reason, you must
   re-whitelist it in the Kite developer console before orders will work
   again.
+
+## 10. Iron condor scripts (Nifty weekly + BankNifty monthly)
+
+These two scripts **place real orders** (5 lots each) unless run with
+`--dry-run`. Each runs as one long-lived process per trading day: it waits
+for a valid token, watches any open position every minute until 15:25
+(exits at 15:15 on expiry day), and enters on its entry day at 15:15.
+
+| | Nifty weekly | BankNifty monthly |
+|---|---|---|
+| Script | `nifty_weekly_condor_live.py` | `banknifty_monthly_condor_live.py` |
+| Legs | sell CE/PE 200 pts OTM, buy 400 pts OTM | sell CE/PE 1000 pts OTM, buy 2500 pts OTM |
+| Entry | Friday 15:15, or the last trading day before a holiday Friday | 15:15, first trading day <= 15 days before monthly expiry |
+| Stop (every minute, expiry day included) | tighter of 1.0x credit or Rs 25k loss | Rs 25k loss |
+| Margin, 5 lots (Sep 2026) | ~Rs 3.0L | ~Rs 4.2-4.5L |
+
+### One-time setup (on top of sections 1-5)
+
+```bash
+sudo timedatectl set-timezone Asia/Kolkata   # cron times below are IST
+cd ~/bmt1/trading && git pull && source venv/bin/activate && pip install -r requirements.txt
+nano nse_holidays.txt   # add this year's NSE weekday holidays (official NSE list)
+crontab -e
+```
+
+```cron
+10 9 * * 1-5 cd /home/trader/bmt1/trading && flock -n /tmp/nifty_condor.lock venv/bin/python nifty_weekly_condor_live.py >> logs/nifty_condor_cron.log 2>&1
+11 9 * * 1-5 cd /home/trader/bmt1/trading && flock -n /tmp/banknifty_condor.lock venv/bin/python banknifty_monthly_condor_live.py >> logs/banknifty_condor_cron.log 2>&1
+```
+
+`flock` stops a second copy starting if one is already running. On holidays
+listed in `nse_holidays.txt` both scripts exit immediately.
+
+### Prove order placement works before real money (do this once)
+
+The account must have the margin in it, and the VPS IP must be whitelisted
+(section 5). During market hours, place a buy you can't realistically get
+filled on and cancel it:
+
+```bash
+python -c "
+from config import load_config; from data import get_kite_client
+k = get_kite_client(load_config())
+spot = k.ltp(['NSE:NIFTY 50'])['NSE:NIFTY 50']['last_price']
+opts = [i for i in k.instruments('NFO') if i['name']=='NIFTY' and i['segment']=='NFO-OPT' and i['instrument_type']=='CE']
+exp = min(i['expiry'] for i in opts)
+atm = min((i for i in opts if i['expiry']==exp), key=lambda i: abs(i['strike']-spot))   # trades far above Rs 0.05
+oid = k.place_order(variety='regular', exchange='NFO', tradingsymbol=atm['tradingsymbol'], transaction_type='BUY',
+                    quantity=atm['lot_size'], product='NRML', order_type='LIMIT', price=0.05)
+print('placed', oid, atm['tradingsymbol'], k.order_history(oid)[-1]['status'])
+k.cancel_order(variety='regular', order_id=oid); print('cancelled')
+print('available margin:', k.margins(segment='equity')['net'])
+"
+```
+
+`placed ... OPEN` then `cancelled` means the IP whitelist and order
+permissions work. A `PermissionException` means the IP isn't whitelisted yet.
+
+### Every trading morning (before 9:15)
+
+1. Open the Kite login URL (`python auth.py` prints it), log in, copy the
+   `request_token` from the redirect URL.
+2. `ssh trader@<VPS_IP>`, then
+   `cd bmt1/trading && venv/bin/python auth.py <request_token>`.
+
+No restart needed: the running scripts re-read the token every minute. Until
+you log in they log `CRITICAL ... the stop is NOT active` -- an open position
+is unprotected until the token is refreshed.
+
+### Watching and intervening
+
+```bash
+tail -f logs/nifty_condor_cron.log                        # live log
+venv/bin/python nifty_weekly_condor_live.py --action status   # position + MTM + stop level
+cat logs/nifty_condor_intraday_$(date +%F).csv            # minute-by-minute MTM
+venv/bin/python nifty_weekly_condor_live.py --action exit     # close everything NOW (real orders)
+touch KILL_SWITCH                                          # block new entries (open positions still monitored)
+```
+
+Same commands with `banknifty_monthly_condor_live.py`. Always cross-check the
+Kite app's Positions tab after an entry or exit.
+
+If an entry fails partway, the script unwinds the legs that filled and logs
+`CRITICAL ... unwinding`; check Positions is flat. If an exit fails partway,
+`nifty_condor_state.json` shows which legs still have no `exit_price`;
+rerun `--action exit` and it closes only those.
+
+### Runbook: first real trade, Thursday 1 Oct 2026 (Friday 2 Oct is a holiday)
+
+- **Wed 30 Sep**: VPS set up (sections 1-5), IP whitelisted, account funded
+  (Rs 3.0L margin plus buffer -- Rs 4-5L recommended), the order-permission
+  check above passes, and `--action status` works on the VPS.
+- **Thu 1 Oct, before 9:15**: log in + `auth.py`. Cron has started both
+  scripts at 9:10. Nifty detects Thursday as the entry day and waits.
+- **Thu 15:15**: Nifty enters (margin check first; wings are bought before
+  the shorts). Check Positions in the Kite app shows 4 legs, 325 qty each.
+  It then watches until 15:25.
+- **Fri 2 Oct**: holiday -- scripts exit immediately.
+- **Mon 5 Oct**: log in before 9:15. Stop is watched every minute all day.
+- **Tue 6 Oct (expiry)**: log in before 9:15. Watched all day; if the stop
+  hasn't fired, the position is closed at 15:15.

@@ -161,6 +161,9 @@ def main() -> None:
         handlers=[logging.StreamHandler(sys.stdout),
                   logging.FileHandler(cfg.logging.log_dir / f"banknifty_condor_{core.now_ist().date()}.log")],
     )
+    if args.action == "auto" and not core.is_trading_day(core.now_ist().date(), core.load_holidays()):
+        logger.info("Exchange holiday -- nothing to do.")
+        return
     kite = core.connect_when_token_valid() if args.action == "auto" else get_kite_client(cfg)
     state_path, history_path = paths(args.dry_run)
     state = core.load_state(state_path)
