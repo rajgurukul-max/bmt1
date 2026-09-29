@@ -35,8 +35,7 @@ import argparse
 import logging
 import sys
 import time as time_module
-from dataclasses import asdict
-from datetime import date, datetime, time, timedelta
+from datetime import date, datetime, time
 
 import condor_live_core as core
 from config import BASE_DIR, load_config
@@ -92,7 +91,7 @@ def is_entry_day(kite, today: date, dry_run: bool) -> tuple[bool, date]:
 
 
 def enter_position(kite, dry_run: bool) -> core.CondorState | None:
-    state_path, _ = paths(dry_run)
+    state_path, history_path = paths(dry_run)
     if core.load_state(state_path) is not None:
         raise RuntimeError("A position is already open -- refusing to enter another one.")
     if KILL_SWITCH_FILE.exists():
@@ -117,16 +116,9 @@ def enter_position(kite, dry_run: bool) -> core.CondorState | None:
     ]
     for leg in legs:
         leg.tradingsymbol = symbol[(leg.strike, leg.opt_type)]
-        _, leg.entry_price = core.place_and_wait(kite, leg.tradingsymbol, leg.is_buy, qty, dry_run)
-
-    net_credit = sum(l.entry_price * (-1 if l.is_buy else 1) for l in legs)
-    state = core.CondorState(
-        status="open", entry_date=today.isoformat(), expiry=expiry.isoformat(),
-        lot_size=lot_size, qty=qty, net_credit=net_credit, legs=[asdict(l) for l in legs],
-    )
-    core.save_state(state, state_path)
+    state = core.enter_condor(kite, legs, qty, lot_size, expiry, dry_run, state_path, history_path, "BankNifty")
     logger.info("ENTERED BankNifty condor: spot=%.2f expiry=%s strikes=%s credit/share=%.2f (Rs %.0f) qty=%d%s",
-                cmp_, expiry, {l.name: l.strike for l in legs}, net_credit, net_credit * qty, qty,
+                cmp_, expiry, {l.name: l.strike for l in legs}, state.net_credit, state.net_credit * qty, qty,
                 " [DRY RUN]" if dry_run else "")
     return state
 
@@ -169,7 +161,7 @@ def main() -> None:
         handlers=[logging.StreamHandler(sys.stdout),
                   logging.FileHandler(cfg.logging.log_dir / f"banknifty_condor_{core.now_ist().date()}.log")],
     )
-    kite = get_kite_client(cfg)
+    kite = core.connect_when_token_valid() if args.action == "auto" else get_kite_client(cfg)
     state_path, history_path = paths(args.dry_run)
     state = core.load_state(state_path)
     until = core.parse_hhmm(args.until) if args.until else None

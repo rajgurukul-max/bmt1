@@ -1,0 +1,4 @@
+# NSE trading holidays (weekdays only), one YYYY-MM-DD per line.
+# Keep this current from NSE's official holiday list each year -- the Nifty
+# script uses it to move the Friday entry earlier when Friday is a holiday.
+2026-10-02  # Gandhi Jayanti (Friday) -> entry moves to Thursday 2026-10-01

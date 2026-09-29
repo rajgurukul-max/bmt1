@@ -20,12 +20,13 @@ import logging
 import sys
 import time as time_module
 from dataclasses import asdict, dataclass
-from datetime import datetime, time
+from datetime import date, datetime, time, timedelta
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
 from nifty_iron_condor_backtest import leg_charges
 
+HOLIDAYS_FILE = Path(__file__).resolve().parent / "nse_holidays.txt"
 IST = ZoneInfo("Asia/Kolkata")
 MARKET_OPEN = time(9, 15)
 MARKET_CLOSE = time(15, 30)
@@ -64,6 +65,32 @@ def now_ist() -> datetime:
 def parse_hhmm(s: str) -> time:
     h, m = s.split(":")
     return time(int(h), int(m))
+
+
+def load_holidays(path: Path = HOLIDAYS_FILE) -> set[date]:
+    if not path.exists():
+        return set()
+    out = set()
+    for line in path.read_text().splitlines():
+        token = line.split("#", 1)[0].strip()
+        if token:
+            out.add(date.fromisoformat(token))
+    return out
+
+
+def is_trading_day(d: date, holidays: set[date]) -> bool:
+    return d.weekday() < 5 and d not in holidays
+
+
+def is_last_trading_day_through(d: date, weekday: int, holidays: set[date]) -> bool:
+    """True if d is a trading day and every day after it up to `weekday` of the
+    same week is not -- e.g. with weekday=4, Friday normally, or Thursday when
+    Friday is a holiday."""
+    if not is_trading_day(d, holidays) or d.weekday() > weekday:
+        return False
+    return not any(
+        is_trading_day(d + timedelta(days=k), holidays) for k in range(1, weekday - d.weekday() + 1)
+    )
 
 
 def dry_path(path: Path, dry_run: bool) -> Path:
@@ -152,12 +179,60 @@ def place_and_wait(kite, tradingsymbol: str, is_buy: bool, qty: int, dry_run: bo
 
 
 def position_mtm(kite, state: CondorState) -> float:
-    """Unrealized P&L in rupees for the whole position (one batched LTP call)."""
-    ltps = get_ltps(kite, [leg["tradingsymbol"] for leg in state.legs])
+    """P&L in rupees for the whole position (one batched LTP call). Legs already
+    closed during an interrupted exit count at their recorded exit price."""
+    open_symbols = [leg["tradingsymbol"] for leg in state.legs if leg.get("exit_price") is None]
+    ltps = get_ltps(kite, open_symbols) if open_symbols else {}
     return sum(
-        (ltps[leg["tradingsymbol"]] - leg["entry_price"]) * (1 if leg["is_buy"] else -1) * state.qty
+        ((leg["exit_price"] if leg.get("exit_price") is not None else ltps[leg["tradingsymbol"]])
+         - leg["entry_price"]) * (1 if leg["is_buy"] else -1) * state.qty
         for leg in state.legs
     )
+
+
+class EntryAborted(RuntimeError):
+    pass
+
+
+def enter_condor(kite, legs: list[Leg], qty: int, lot_size: int, expiry: date, dry_run: bool,
+                 state_path: Path, history_path: Path, label: str) -> CondorState:
+    """Margin-check, then fill legs in the given order (wings first). If any leg
+    fails after others filled, the filled legs are unwound immediately so no
+    untracked position is left behind; if the unwind itself fails, the partial
+    position stays in the state file for the next run to manage."""
+    orders = [dict(exchange=EXCHANGE, tradingsymbol=l.tradingsymbol, variety="regular", product="NRML",
+                   order_type="MARKET", quantity=qty,
+                   transaction_type=kite.TRANSACTION_TYPE_BUY if l.is_buy else kite.TRANSACTION_TYPE_SELL)
+              for l in legs]
+    required = kite.basket_order_margins(orders)["final"]["total"]
+    available = kite.margins(segment="equity")["net"]
+    logger.info("%s margin check: required Rs %.0f, available Rs %.0f", label, required, available)
+    if required > available:
+        msg = f"{label}: insufficient funds (need Rs {required:,.0f}, have Rs {available:,.0f}) -- not entering."
+        if not dry_run:
+            raise EntryAborted(msg)
+        logger.warning("[DRY RUN] %s", msg)
+
+    filled: list[Leg] = []
+    try:
+        for leg in legs:
+            _, leg.entry_price = place_and_wait(kite, leg.tradingsymbol, leg.is_buy, qty, dry_run)
+            filled.append(leg)
+    except Exception as exc:
+        logger.critical("%s entry failed on %s after %d leg(s) filled: %s -- unwinding.",
+                        label, leg.tradingsymbol, len(filled), exc)
+        if filled:
+            partial = CondorState("open", now_ist().date().isoformat(), expiry.isoformat(), lot_size, qty,
+                                  sum(l.entry_price * (-1 if l.is_buy else 1) for l in filled),
+                                  [asdict(l) for l in filled])
+            save_state(partial, state_path)
+            exit_position(kite, partial, "entry_failed_unwind", dry_run, state_path, history_path)
+        raise EntryAborted(f"{label} entry aborted: {exc}") from exc
+
+    state = CondorState("open", now_ist().date().isoformat(), expiry.isoformat(), lot_size, qty,
+                        sum(l.entry_price * (-1 if l.is_buy else 1) for l in legs), [asdict(l) for l in legs])
+    save_state(state, state_path)
+    return state
 
 
 def stop_threshold(state: CondorState, credit_multiple: float | None, rupee_cap: float | None) -> float | None:
@@ -168,6 +243,30 @@ def stop_threshold(state: CondorState, credit_multiple: float | None, rupee_cap:
     if rupee_cap is not None:
         levels.append(-abs(rupee_cap))
     return max(levels) if levels else None
+
+
+def connect_when_token_valid(give_up: time = time(15, 20), retry_seconds: float = 60.0):
+    """Kite client once .env holds a valid access token. The daily process
+    starts before the morning login; crashing on a stale token would leave an
+    open position with no stop watching it, so re-read .env and retry instead
+    (auth.py rewrites .env, no restart needed)."""
+    from dotenv import load_dotenv
+
+    from config import BASE_DIR, load_config
+    from data import get_kite_client
+
+    while True:
+        load_dotenv(BASE_DIR / ".env", override=True)
+        try:
+            kite = get_kite_client(load_config())
+            kite.profile()
+            return kite
+        except Exception as exc:
+            if now_ist().time() >= give_up:
+                raise RuntimeError("No valid Kite token all day -- any open position was NOT monitored.") from exc
+            logger.critical("Kite token not valid (%s). Log in now: python auth.py <request_token>. "
+                            "Retrying every %.0fs -- the stop is NOT active until then.", exc, retry_seconds)
+            time_module.sleep(retry_seconds)
 
 
 # --- intraday monitor -------------------------------------------------------------
@@ -204,14 +303,23 @@ def monitor_until(kite, state: CondorState, threshold: float | None, until: time
 
 
 def exit_position(kite, state: CondorState, reason: str, dry_run: bool, state_path: Path, history_path: Path) -> float:
-    """Close all legs (shorts first -- they carry the uncapped side), record the
-    round trip in history, clear state. Returns net P&L in rupees."""
-    gross = charges = 0.0
+    """Close all open legs (shorts first -- they carry the uncapped side), record
+    the round trip in history, clear state. Returns net P&L in rupees. Each
+    leg's exit price is saved as soon as it fills, so if an order fails midway
+    the state file shows exactly which legs are still open and a retry closes
+    only those -- it never re-trades a leg that is already flat."""
     for leg in sorted(state.legs, key=lambda l: l["is_buy"]):  # False (short) sorts first
-        _, fill = place_and_wait(kite, leg["tradingsymbol"], not leg["is_buy"], state.qty, dry_run)
+        if leg.get("exit_price") is not None:
+            continue
+        _, leg["exit_price"] = place_and_wait(kite, leg["tradingsymbol"], not leg["is_buy"], state.qty, dry_run)
+        save_state(state, state_path)
+
+    gross = charges = 0.0
+    for leg in state.legs:
         sign = 1 if leg["is_buy"] else -1
-        gross += (fill - leg["entry_price"]) * sign * state.qty
-        charges += leg_charges(leg["entry_price"], state.qty, leg["is_buy"]) + leg_charges(fill, state.qty, leg["is_buy"])
+        gross += (leg["exit_price"] - leg["entry_price"]) * sign * state.qty
+        charges += (leg_charges(leg["entry_price"], state.qty, leg["is_buy"])
+                    + leg_charges(leg["exit_price"], state.qty, leg["is_buy"]))
 
     net = gross - charges
     logger.info("EXITED condor (%s): gross=Rs %.2f charges=Rs %.2f net=Rs %.2f", reason, gross, charges, net)

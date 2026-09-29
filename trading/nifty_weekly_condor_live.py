@@ -33,7 +33,6 @@ import argparse
 import logging
 import sys
 import time as time_module
-from dataclasses import asdict
 from datetime import date, datetime, time
 
 import condor_live_core as core
@@ -77,8 +76,16 @@ def week_chain(kite, after: date) -> tuple[list[dict], date]:
     return [i for i in opts if i["expiry"] == expiry], expiry
 
 
+def is_entry_day(d: date) -> bool:
+    """Friday, or the last trading day before it when Friday is a holiday
+    (e.g. Thursday 1 Oct 2026, with Friday 2 Oct Gandhi Jayanti). Backtest:
+    Thursday-close entries into the next Tuesday expiry earned about the same
+    as Friday-close ones (70% vs 77% win rate, ~Rs 6.5k vs ~7.2k per trade)."""
+    return core.is_last_trading_day_through(d, ENTRY_WEEKDAY, core.load_holidays())
+
+
 def enter_position(kite, dry_run: bool) -> core.CondorState | None:
-    state_path, _ = paths(dry_run)
+    state_path, history_path = paths(dry_run)
     if core.load_state(state_path) is not None:
         raise RuntimeError("A position is already open -- refusing to enter another one.")
     if KILL_SWITCH_FILE.exists():
@@ -100,17 +107,10 @@ def enter_position(kite, dry_run: bool) -> core.CondorState | None:
     ]
     for leg in legs:
         leg.tradingsymbol = symbol[(leg.strike, leg.opt_type)]
-        _, leg.entry_price = core.place_and_wait(kite, leg.tradingsymbol, leg.is_buy, qty, dry_run)
-
-    net_credit = sum(l.entry_price * (-1 if l.is_buy else 1) for l in legs)
-    state = core.CondorState(
-        status="open", entry_date=today().isoformat(), expiry=expiry.isoformat(),
-        lot_size=lot_size, qty=qty, net_credit=net_credit, legs=[asdict(l) for l in legs],
-    )
-    core.save_state(state, state_path)
-    logger.info("ENTERED Nifty condor: spot=%.2f expiry=%s strikes=%s credit/share=%.2f (Rs %.0f) qty=%d%s",
-                cmp_, expiry, {l.name: l.strike for l in legs}, net_credit, net_credit * qty, qty,
-                " [DRY RUN]" if dry_run else "")
+    state = core.enter_condor(kite, legs, qty, lot_size, expiry, dry_run, state_path, history_path, "Nifty")
+    logger.info("ENTERED Nifty condor: spot=%.2f expiry=%s strikes=%s credit/share=%.2f (Rs %.0f) qty=%d stop Rs %.0f%s",
+                cmp_, expiry, {l.name: l.strike for l in legs}, state.net_credit, state.net_credit * qty, qty,
+                threshold_for(state), " [DRY RUN]" if dry_run else "")
     return state
 
 
@@ -156,14 +156,14 @@ def main() -> None:
         handlers=[logging.StreamHandler(sys.stdout),
                   logging.FileHandler(cfg.logging.log_dir / f"nifty_condor_{today()}.log")],
     )
-    kite = get_kite_client(cfg)
+    kite = core.connect_when_token_valid() if args.action == "auto" else get_kite_client(cfg)
     state_path, history_path = paths(args.dry_run)
     state = core.load_state(state_path)
     until = core.parse_hhmm(args.until) if args.until else None
 
     if args.action == "status":
         if state is None:
-            logger.info("No open position. Entry weekday %d; today is %d.", ENTRY_WEEKDAY, today().weekday())
+            logger.info("No open position. Entry day today: %s", is_entry_day(today()))
         else:
             logger.info("Open position expiry %s, MTM now Rs %.0f, stop at Rs %.0f",
                         state.expiry, core.position_mtm(kite, state), threshold_for(state))
@@ -191,7 +191,7 @@ def main() -> None:
     if state is not None:
         monitor_and_manage(kite, state, args.dry_run, poll_seconds=args.poll_seconds)
         return
-    if today().weekday() != ENTRY_WEEKDAY:
+    if not is_entry_day(today()):
         logger.info("No open position and today is not the entry day -- nothing to do.")
         return
     logger.info("Entry day -- entering at %s IST.", ENTRY_TIME.strftime("%H:%M"))
