@@ -197,13 +197,14 @@ it to run unattended.
 These two scripts **place real orders** (5 lots each) unless run with
 `--dry-run`. Each runs as one long-lived process per trading day: it waits
 for a valid token, watches any open position every minute until 15:25
-(exits at 15:15 on expiry day), and enters on its entry day at 15:15.
+(exits at 15:15 on expiry day), and enters on its entry day (Nifty 09:30,
+BankNifty 15:15).
 
 | | Nifty weekly | BankNifty monthly |
 |---|---|---|
 | Script | `nifty_weekly_condor_live.py` | `banknifty_monthly_condor_live.py` |
 | Legs | sell CE/PE 200 pts OTM, buy 400 pts OTM | sell CE/PE 1000 pts OTM, buy 2500 pts OTM |
-| Entry | Friday 15:15, or the last trading day before a holiday Friday | 15:15, first trading day <= 15 days before monthly expiry |
+| Entry | Friday 09:30, or Thursday 09:30 when Friday is a holiday | 15:15, first trading day <= 15 days before monthly expiry |
 | Stop (every minute, expiry day included) | tighter of 1.0x credit or Rs 25k loss | Rs 25k loss |
 | Margin, 5 lots (Sep 2026) | ~Rs 3.0L | ~Rs 4.2-4.5L |
 

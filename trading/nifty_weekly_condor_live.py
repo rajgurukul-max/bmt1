@@ -2,7 +2,9 @@
 
 Configuration (nifty_iron_condor_backtest.py, 2 years of real NSE settlement
 data; Rs 5.29L net on 5 lots with a Friday-close entry and 1.0x stop):
-  - Enter Friday at ENTRY_TIME (near the close, matching the backtest):
+  - Enter Friday at ENTRY_TIME (09:30 -- the live choice; the backtest could
+    only use the Friday close, as EOD data has no 09:30 premiums), or on
+    Thursday when Friday is a holiday:
     sell CE/PE 200 pts OTM, buy CE/PE 400 pts OTM, 5 lots, product NRML.
   - Exit the whole position when its loss reaches the TIGHTER of 1.0x the net
     credit collected or Rs 25,000, checked EVERY MINUTE through the trading
@@ -15,8 +17,9 @@ data; Rs 5.29L net on 5 lots with a Friday-close entry and 1.0x stop):
 Run ONE long-lived process per trading day, started before the open:
     10 9 * * 1-5  cd /path/to/trading && venv/bin/python nifty_weekly_condor_live.py >> logs/nifty_condor_cron.log 2>&1
 It monitors any open position until 15:25 (exits at 15:15 on expiry day), and
-on Fridays with no position it enters at ENTRY_TIME and monitors the rest of
-the session.
+on its entry day with no position it enters at ENTRY_TIME (or as soon as the
+token is valid, if the morning login is late) and monitors the rest of the
+session.
 
 Manual actions (for testing / intervention):
     --action status | enter | check | monitor | exit   (add --dry-run to place nothing)
@@ -51,7 +54,7 @@ LOTS = 5
 STOP_LOSS_CREDIT_MULTIPLE = 1.0
 STOP_LOSS_RUPEES = 25000
 ENTRY_WEEKDAY = 4                # Friday (0=Monday .. 4=Friday)
-ENTRY_TIME = time(15, 15)        # backtest entered at Friday's close
+ENTRY_TIME = time(9, 30)         # live entry; the backtest used Friday's close
 MONITOR_END = time(15, 25)
 EXPIRY_EXIT_TIME = time(15, 15)
 INDEX_KEY = "NSE:NIFTY 50"
