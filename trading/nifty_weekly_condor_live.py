@@ -147,6 +147,8 @@ def main() -> None:
     ap.add_argument("--action", choices=["auto", "status", "enter", "check", "monitor", "exit"], default="auto")
     ap.add_argument("--until", default=None, help="HH:MM IST, for --action monitor")
     ap.add_argument("--poll-seconds", type=float, default=60.0)
+    ap.add_argument("--entry-time", default=None,
+                    help=f"HH:MM IST entry time for auto mode (default {ENTRY_TIME.strftime('%%H:%%M')})")
     args = ap.parse_args()
 
     cfg = load_config()
@@ -197,8 +199,9 @@ def main() -> None:
     if not is_entry_day(today()):
         logger.info("No open position and today is not the entry day -- nothing to do.")
         return
-    logger.info("Entry day -- entering at %s IST.", ENTRY_TIME.strftime("%H:%M"))
-    wait_until(ENTRY_TIME)
+    entry_time = core.parse_hhmm(args.entry_time) if args.entry_time else ENTRY_TIME
+    logger.info("Entry day -- entering at %s IST.", entry_time.strftime("%H:%M"))
+    wait_until(entry_time)
     state = enter_position(kite, args.dry_run)
     if state is not None:
         monitor_and_manage(kite, state, args.dry_run, poll_seconds=args.poll_seconds)
