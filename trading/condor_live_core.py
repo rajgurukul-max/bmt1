@@ -33,6 +33,7 @@ MARKET_CLOSE = time(15, 30)
 EXCHANGE = "NFO"
 ORDER_POLL_INTERVAL_S = 1.0
 ORDER_FILL_TIMEOUT_S = 30.0
+EXIT_ATTEMPTS = 3          # re-priced retries per leg when closing
 
 logger = logging.getLogger("condor_live")
 
@@ -45,6 +46,7 @@ class Leg:
     tradingsymbol: str
     is_buy: bool
     entry_price: float | None = None
+    qty: int | None = None   # only set when it differs from the position's qty (a partial fill)
 
 
 @dataclass
@@ -145,6 +147,23 @@ def get_ltps(kite, tradingsymbols: list[str]) -> dict[str, float]:
     return {s: quotes[k]["last_price"] for s, k in zip(tradingsymbols, keys)}
 
 
+class OrderNotFilled(RuntimeError):
+    """An order ended without filling completely. `filled_qty` (possibly 0)
+    at `avg_price` DID trade and is now a real position the caller must track."""
+
+    def __init__(self, msg: str, filled_qty: int = 0, avg_price: float = 0.0):
+        super().__init__(msg)
+        self.filled_qty = filled_qty
+        self.avg_price = avg_price
+
+
+def _not_filled(order_id: str, tradingsymbol: str, last: dict, why: str) -> OrderNotFilled:
+    filled = int(last.get("filled_quantity") or 0)
+    avg = float(last.get("average_price") or 0.0)
+    return OrderNotFilled(f"Order {order_id} ({tradingsymbol}) {why}; filled {filled} @ {avg:.2f}: "
+                          f"{last.get('status_message')}", filled, avg)
+
+
 def place_and_wait(kite, tradingsymbol: str, is_buy: bool, qty: int, dry_run: bool) -> tuple[str | None, float]:
     ltp = get_ltps(kite, [tradingsymbol])[tradingsymbol]
     buffer = max(ltp * 0.02, 0.05)
@@ -171,23 +190,49 @@ def place_and_wait(kite, tradingsymbol: str, is_buy: bool, qty: int, dry_run: bo
             logger.info("Order %s COMPLETE avg_price=%.2f", order_id, avg_price)
             return order_id, avg_price
         if last["status"] in ("REJECTED", "CANCELLED"):
-            raise RuntimeError(f"Order {order_id} ({tradingsymbol}) ended in status={last['status']}: {last.get('status_message')}")
+            raise _not_filled(order_id, tradingsymbol, last, f"ended in status={last['status']}")
         time_module.sleep(ORDER_POLL_INTERVAL_S)
 
-    kite.cancel_order(variety=kite.VARIETY_REGULAR, order_id=order_id)
-    raise RuntimeError(f"Order {order_id} ({tradingsymbol}) failed to fill in {ORDER_FILL_TIMEOUT_S:.0f}s; cancelled, manual check needed.")
+    # Not filled in time: cancel, then read the final state -- part of the
+    # quantity may have traded, or the whole order may fill while cancelling.
+    try:
+        kite.cancel_order(variety=kite.VARIETY_REGULAR, order_id=order_id)
+    except Exception as exc:
+        logger.warning("Cancel of order %s failed (%s) -- it may have just filled.", order_id, exc)
+    for _ in range(10):
+        last = kite.order_history(order_id)[-1]
+        if last["status"] == "COMPLETE":
+            avg_price = float(last["average_price"])
+            logger.info("Order %s COMPLETE (while cancelling) avg_price=%.2f", order_id, avg_price)
+            return order_id, avg_price
+        if last["status"] in ("REJECTED", "CANCELLED"):
+            break
+        time_module.sleep(ORDER_POLL_INTERVAL_S)
+    else:
+        logger.critical("Order %s (%s) still %s after cancel -- CHECK THE ORDERS TAB, its fill may change.",
+                        order_id, tradingsymbol, last["status"])
+    raise _not_filled(order_id, tradingsymbol, last, f"not filled in {ORDER_FILL_TIMEOUT_S:.0f}s, cancelled")
+
+
+def leg_qty(state: CondorState, leg: dict) -> int:
+    return leg.get("qty") or state.qty
 
 
 def position_mtm(kite, state: CondorState) -> float:
-    """P&L in rupees for the whole position (one batched LTP call). Legs already
-    closed during an interrupted exit count at their recorded exit price."""
+    """P&L in rupees for the whole position (one batched LTP call). Quantity
+    already closed during an interrupted exit counts at its actual fill price."""
     open_symbols = [leg["tradingsymbol"] for leg in state.legs if leg.get("exit_price") is None]
     ltps = get_ltps(kite, open_symbols) if open_symbols else {}
-    return sum(
-        ((leg["exit_price"] if leg.get("exit_price") is not None else ltps[leg["tradingsymbol"]])
-         - leg["entry_price"]) * (1 if leg["is_buy"] else -1) * state.qty
-        for leg in state.legs
-    )
+    total = 0.0
+    for leg in state.legs:
+        q, sign = leg_qty(state, leg), (1 if leg["is_buy"] else -1)
+        if leg.get("exit_price") is not None:
+            total += (leg["exit_price"] - leg["entry_price"]) * sign * q
+        else:
+            closed = leg.get("closed_qty", 0)
+            total += ((leg.get("exit_value", 0.0) - leg["entry_price"] * closed)
+                      + (ltps[leg["tradingsymbol"]] - leg["entry_price"]) * (q - closed)) * sign
+    return total
 
 
 class EntryAborted(RuntimeError):
@@ -197,9 +242,11 @@ class EntryAborted(RuntimeError):
 def enter_condor(kite, legs: list[Leg], qty: int, lot_size: int, expiry: date, dry_run: bool,
                  state_path: Path, history_path: Path, label: str) -> CondorState:
     """Margin-check, then fill legs in the given order (wings first). If any leg
-    fails after others filled, the filled legs are unwound immediately so no
-    untracked position is left behind; if the unwind itself fails, the partial
-    position stays in the state file for the next run to manage."""
+    fails after others filled -- including a leg that filled only partly --
+    everything that traded is unwound immediately, shorts first, so no
+    untracked position is left behind. If the unwind itself fails, the wings
+    are kept (they still cover any short left open) and the state file holds
+    exactly what is still open for --action exit to finish."""
     orders = [dict(exchange=EXCHANGE, tradingsymbol=l.tradingsymbol, variety="regular", product="NRML",
                    order_type="MARKET", quantity=qty,
                    transaction_type=kite.TRANSACTION_TYPE_BUY if l.is_buy else kite.TRANSACTION_TYPE_SELL)
@@ -221,12 +268,23 @@ def enter_condor(kite, legs: list[Leg], qty: int, lot_size: int, expiry: date, d
     except Exception as exc:
         logger.critical("%s entry failed on %s after %d leg(s) filled: %s -- unwinding.",
                         label, leg.tradingsymbol, len(filled), exc)
+        part_qty = getattr(exc, "filled_qty", 0)
+        if part_qty:
+            logger.critical("%s: %d of %d filled on %s before the order died -- unwinding that too.",
+                            label, part_qty, qty, leg.tradingsymbol)
+            filled.append(Leg(leg.name, leg.opt_type, leg.strike, leg.tradingsymbol, leg.is_buy,
+                              exc.avg_price, part_qty))
         if filled:
             partial = CondorState("open", now_ist().date().isoformat(), expiry.isoformat(), lot_size, qty,
-                                  sum(l.entry_price * (-1 if l.is_buy else 1) for l in filled),
+                                  sum(l.entry_price * (-1 if l.is_buy else 1) * (l.qty or qty) for l in filled) / qty,
                                   [asdict(l) for l in filled])
             save_state(partial, state_path)
-            exit_position(kite, partial, "entry_failed_unwind", dry_run, state_path, history_path)
+            try:
+                exit_position(kite, partial, "entry_failed_unwind", dry_run, state_path, history_path)
+            except Exception as unwind_exc:
+                logger.critical("%s UNWIND FAILED (%s). MANUAL ACTION: check Positions; %s lists what is "
+                                "still open and `--action exit` closes only that.", label, unwind_exc, state_path)
+                raise EntryAborted(f"{label} entry aborted and unwind failed: {unwind_exc}") from exc
         raise EntryAborted(f"{label} entry aborted: {exc}") from exc
 
     state = CondorState("open", now_ist().date().isoformat(), expiry.isoformat(), lot_size, qty,
@@ -304,22 +362,44 @@ def monitor_until(kite, state: CondorState, threshold: float | None, until: time
 
 def exit_position(kite, state: CondorState, reason: str, dry_run: bool, state_path: Path, history_path: Path) -> float:
     """Close all open legs (shorts first -- they carry the uncapped side), record
-    the round trip in history, clear state. Returns net P&L in rupees. Each
-    leg's exit price is saved as soon as it fills, so if an order fails midway
-    the state file shows exactly which legs are still open and a retry closes
-    only those -- it never re-trades a leg that is already flat."""
+    the round trip in history, clear state. Returns net P&L in rupees. Every
+    fill -- including part of an order -- is saved to the state file as soon as
+    it is known, and an unfilled remainder is retried (re-priced) up to
+    EXIT_ATTEMPTS times. A short that cannot be closed stops the exit before
+    any wing is sold. A rerun closes only what is still open; it never
+    re-trades quantity that is already flat."""
     for leg in sorted(state.legs, key=lambda l: l["is_buy"]):  # False (short) sorts first
         if leg.get("exit_price") is not None:
             continue
-        _, leg["exit_price"] = place_and_wait(kite, leg["tradingsymbol"], not leg["is_buy"], state.qty, dry_run)
-        save_state(state, state_path)
+        q = leg_qty(state, leg)
+        for attempt in range(1, EXIT_ATTEMPTS + 1):
+            remaining = q - leg.get("closed_qty", 0)
+            try:
+                _, price = place_and_wait(kite, leg["tradingsymbol"], not leg["is_buy"], remaining, dry_run)
+                got, err = remaining, None
+            except OrderNotFilled as exc:
+                got, price, err = exc.filled_qty, exc.avg_price, exc
+            if got:
+                leg["closed_qty"] = leg.get("closed_qty", 0) + got
+                leg["exit_value"] = leg.get("exit_value", 0.0) + got * price
+            if leg.get("closed_qty", 0) >= q:
+                leg["exit_price"] = leg["exit_value"] / q
+                save_state(state, state_path)
+                break
+            save_state(state, state_path)
+            logger.critical("Closing %s: attempt %d/%d failed (%s); %d of %d still open.",
+                            leg["tradingsymbol"], attempt, EXIT_ATTEMPTS, err, q - leg.get("closed_qty", 0), q)
+        else:
+            raise RuntimeError(
+                f"Could not close {leg['tradingsymbol']}: {q - leg.get('closed_qty', 0)} of {q} still open after "
+                f"{EXIT_ATTEMPTS} attempts. MANUAL ACTION: check Positions; rerun --action exit to close the rest.")
 
     gross = charges = 0.0
     for leg in state.legs:
-        sign = 1 if leg["is_buy"] else -1
-        gross += (leg["exit_price"] - leg["entry_price"]) * sign * state.qty
-        charges += (leg_charges(leg["entry_price"], state.qty, leg["is_buy"])
-                    + leg_charges(leg["exit_price"], state.qty, leg["is_buy"]))
+        q, sign = leg_qty(state, leg), (1 if leg["is_buy"] else -1)
+        gross += (leg["exit_price"] - leg["entry_price"]) * sign * q
+        charges += (leg_charges(leg["entry_price"], q, leg["is_buy"])
+                    + leg_charges(leg["exit_price"], q, leg["is_buy"]))
 
     net = gross - charges
     logger.info("EXITED condor (%s): gross=Rs %.2f charges=Rs %.2f net=Rs %.2f", reason, gross, charges, net)

@@ -273,10 +273,16 @@ touch KILL_SWITCH                                          # block new entries (
 Same commands with `banknifty_monthly_condor_live.py`. Always cross-check the
 Kite app's Positions tab after an entry or exit.
 
-If an entry fails partway, the script unwinds the legs that filled and logs
-`CRITICAL ... unwinding`; check Positions is flat. If an exit fails partway,
-`nifty_condor_state.json` shows which legs still have no `exit_price`;
-rerun `--action exit` and it closes only those.
+If an entry fails partway, the script unwinds everything that traded --
+including an order that filled only partly (e.g. 130 of 325) -- shorts first,
+and logs `CRITICAL ... unwinding`; check Positions is flat. If a short can't
+be bought back it logs `UNWIND FAILED ... MANUAL ACTION` and keeps the wings
+so the open short stays covered.
+
+When closing, any unfilled remainder is retried at a fresh price (3 tries per
+leg). If a leg still won't close, the exit stops before selling any wing, and
+`nifty_condor_state.json` records what is still open (`closed_qty` for a partly
+closed leg); rerun `--action exit` and it closes only the remainder.
 
 ### Runbook: first real trade, Thursday 1 Oct 2026 (Friday 2 Oct is a holiday)
 
