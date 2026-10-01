@@ -164,6 +164,17 @@ def _not_filled(order_id: str, tradingsymbol: str, last: dict, why: str) -> Orde
                           f"{last.get('status_message')}", filled, avg)
 
 
+def _last_status(kite, order_id: str) -> dict | None:
+    """Latest order_history entry, or None if Kite can't report it right now.
+    Straight after place_order Kite often answers "Couldn't find that
+    order_id" for a moment; that is not a failure, the order exists."""
+    try:
+        return kite.order_history(order_id)[-1]
+    except Exception as exc:
+        logger.warning("Order %s status not available yet (%s) -- retrying.", order_id, exc)
+        return None
+
+
 def place_and_wait(kite, tradingsymbol: str, is_buy: bool, qty: int, dry_run: bool) -> tuple[str | None, float]:
     ltp = get_ltps(kite, [tradingsymbol])[tradingsymbol]
     buffer = max(ltp * 0.02, 0.05)
@@ -183,8 +194,12 @@ def place_and_wait(kite, tradingsymbol: str, is_buy: bool, qty: int, dry_run: bo
     logger.info("Placed order_id=%s %s %s qty=%d limit=%.2f", order_id, transaction_type, tradingsymbol, qty, limit_price)
 
     deadline = time_module.monotonic() + ORDER_FILL_TIMEOUT_S
+    last = None
     while time_module.monotonic() < deadline:
-        last = kite.order_history(order_id)[-1]
+        last = _last_status(kite, order_id)
+        if last is None:
+            time_module.sleep(ORDER_POLL_INTERVAL_S)
+            continue
         if last["status"] == "COMPLETE":
             avg_price = float(last["average_price"])
             logger.info("Order %s COMPLETE avg_price=%.2f", order_id, avg_price)
@@ -199,8 +214,11 @@ def place_and_wait(kite, tradingsymbol: str, is_buy: bool, qty: int, dry_run: bo
         kite.cancel_order(variety=kite.VARIETY_REGULAR, order_id=order_id)
     except Exception as exc:
         logger.warning("Cancel of order %s failed (%s) -- it may have just filled.", order_id, exc)
-    for _ in range(10):
-        last = kite.order_history(order_id)[-1]
+    for _ in range(30):
+        last = _last_status(kite, order_id) or last
+        if last is None:
+            time_module.sleep(ORDER_POLL_INTERVAL_S)
+            continue
         if last["status"] == "COMPLETE":
             avg_price = float(last["average_price"])
             logger.info("Order %s COMPLETE (while cancelling) avg_price=%.2f", order_id, avg_price)
@@ -209,6 +227,10 @@ def place_and_wait(kite, tradingsymbol: str, is_buy: bool, qty: int, dry_run: bo
             break
         time_module.sleep(ORDER_POLL_INTERVAL_S)
     else:
+        if last is None:
+            logger.critical("Order %s (%s): Kite never reported its status -- CHECK THE ORDERS TAB.",
+                            order_id, tradingsymbol)
+            raise RuntimeError(f"Order {order_id} ({tradingsymbol}) status unknown -- check the Orders tab.")
         logger.critical("Order %s (%s) still %s after cancel -- CHECK THE ORDERS TAB, its fill may change.",
                         order_id, tradingsymbol, last["status"])
     raise _not_filled(order_id, tradingsymbol, last, f"not filled in {ORDER_FILL_TIMEOUT_S:.0f}s, cancelled")
