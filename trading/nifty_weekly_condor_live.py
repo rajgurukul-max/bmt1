@@ -148,7 +148,7 @@ def main() -> None:
     ap.add_argument("--until", default=None, help="HH:MM IST, for --action monitor")
     ap.add_argument("--poll-seconds", type=float, default=60.0)
     ap.add_argument("--entry-time", default=None,
-                    help=f"HH:MM IST entry time for auto mode (default {ENTRY_TIME.strftime('%%H:%%M')})")
+                    help="HH:MM IST entry time for auto mode (default: ENTRY_TIME)")
     args = ap.parse_args()
 
     cfg = load_config()
