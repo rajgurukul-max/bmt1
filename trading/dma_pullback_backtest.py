@@ -32,7 +32,12 @@ COST = 0.0025
 MIN_HISTORY = 200
 
 
-def trades_for(sym: str, df: pd.DataFrame, uptrend_only: bool) -> list[dict]:
+def trades_for(sym: str, df: pd.DataFrame, uptrend_only: bool, stop_pct: float | None = None,
+               max_days: int | None = None) -> list[dict]:
+    """stop_pct: exit when the low falls stop_pct below entry (at that level, or
+    the open if it gaps through), checked from the entry day itself and BEFORE
+    the target on the same day (conservative). max_days: exit at the close of
+    the first day max_days or more calendar days after entry."""
     df = df.copy()
     df["sma50"] = df["close"].rolling(50).mean().shift(1)
     df["sma200"] = df["close"].rolling(200).mean().shift(1)
@@ -48,15 +53,24 @@ def trades_for(sym: str, df: pd.DataFrame, uptrend_only: bool) -> list[dict]:
                 entry = min(row.open, row.sma200)
                 pos = dict(symbol=sym, entry_date=row.date, entry=entry, low=row.low, target_at_entry=row.sma50)
                 armed = False
+                if stop_pct is not None and row.low <= entry * (1 - stop_pct):
+                    out.append(dict(pos, exit_date=row.date, exit=entry * (1 - stop_pct), open=False, reason="stop"))
+                    pos = None
             continue
         pos["low"] = min(pos["low"], row.low)
-        if row.high >= row.sma50:
-            exit_px = max(row.open, row.sma50)
-            out.append(dict(pos, exit_date=row.date, exit=exit_px, open=False))
+        stop_px = None if stop_pct is None else pos["entry"] * (1 - stop_pct)
+        if stop_px is not None and row.low <= stop_px:
+            out.append(dict(pos, exit_date=row.date, exit=min(row.open, stop_px), open=False, reason="stop"))
+            pos = None
+        elif row.high >= row.sma50:
+            out.append(dict(pos, exit_date=row.date, exit=max(row.open, row.sma50), open=False, reason="target"))
+            pos = None
+        elif max_days is not None and (row.date - pos["entry_date"]).days >= max_days:
+            out.append(dict(pos, exit_date=row.date, exit=row.close, open=False, reason="time"))
             pos = None
     if pos is not None:
         last = df.iloc[-1]
-        out.append(dict(pos, exit_date=last["date"], exit=last["close"], open=True))
+        out.append(dict(pos, exit_date=last["date"], exit=last["close"], open=True, reason="open"))
     return out
 
 
@@ -75,6 +89,30 @@ def summarize(t: pd.DataFrame, label: str) -> None:
     if len(still_open):
         print(f"open:   {len(still_open)} trades, avg mark-to-market {still_open['ret'].mean():+.2%}, "
               f"worst {still_open['ret'].min():+.1%}, avg days held {still_open['days'].mean():.0f}")
+
+
+def run_grid(data: dict, symbols: list[str] | None, label: str) -> None:
+    """Uptrend variant under each stop / time-limit combination."""
+    rows = []
+    for stop in (None, 0.08, 0.10, 0.15):
+        for max_days in (None, 30):
+            t = pd.DataFrame([tr for sym, df in data.items() if symbols is None or sym in symbols
+                              for tr in trades_for(sym, df, True, stop, max_days)])
+            t["ret"] = t["exit"] / t["entry"] - 1 - COST
+            t["days"] = (t["exit_date"] - t["entry_date"]).dt.days
+            recent = t[t["entry_date"] >= t["entry_date"].max() - pd.Timedelta(days=730)]
+            rows.append({
+                "stop": "none" if stop is None else f"-{stop:.0%}",
+                "time limit": "none" if max_days is None else f"{max_days}d",
+                "trades": len(t), "win rate": f"{(t.ret > 0).mean():.0%}",
+                "avg/trade": f"{t.ret.mean():+.2%}", "worst": f"{t.ret.min():+.0%}",
+                "avg hold d": round(t.days.mean()), "stopped": int((t.reason == "stop").sum()),
+                "timed out": int((t.reason == "time").sum()),
+                "total Rs (1L/trade)": f"{t.ret.sum() * 1e5:,.0f}",
+                "last 2y Rs": f"{recent.ret.sum() * 1e5:,.0f}",
+            })
+    print(f"\n=== {label}: uptrend touches, totals include open trades at last close ===")
+    print(pd.DataFrame(rows).to_string(index=False))
 
 
 def main() -> None:
@@ -105,5 +143,18 @@ def main() -> None:
         print("worst 10:\n" + fmt.tail(10).to_string())
 
 
+
+
+def stops_main() -> None:
+    data = {}
+    for p in sorted(glob.glob(str(DAILY / "*.csv"))):
+        df = pd.read_csv(p, parse_dates=["date"])
+        if len(df) >= MIN_HISTORY + 50:
+            data[os.path.basename(p)[:-4]] = df
+    run_grid(data, ["ANGELONE"], "ANGELONE")
+    run_grid(data, None, f"ALL {len(data)} NSE100 stocks")
+
+
 if __name__ == "__main__":
-    main()
+    import sys
+    stops_main() if "--stops" in sys.argv else main()
