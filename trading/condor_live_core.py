@@ -237,7 +237,36 @@ def place_and_wait(kite, tradingsymbol: str, is_buy: bool, qty: int, dry_run: bo
 
 
 def leg_qty(state: CondorState, leg: dict) -> int:
-    return leg.get("qty") or state.qty
+    return leg["qty"] if leg.get("qty") is not None else state.qty
+
+
+def reconcile_with_broker(kite, state: CondorState) -> None:
+    """Shrink each still-open leg to what the account actually holds. The
+    broker can square off part of a position on its own (e.g. Zerodha's RMS
+    cutting short lots on an expiry-day margin shortfall); closing the full
+    recorded quantity would then over-trade and open new positions. P&L of
+    quantity the broker closed is not known here -- it is left out of the
+    history row (the broker's P&L statement has it)."""
+    try:
+        held = {}
+        for p in kite.positions()["net"]:
+            if p.get("exchange", EXCHANGE) == EXCHANGE:
+                held[p["tradingsymbol"]] = held.get(p["tradingsymbol"], 0) + int(p["quantity"])
+    except Exception as exc:
+        logger.warning("Could not read broker positions (%s) -- closing the recorded quantities.", exc)
+        return
+    for leg in state.legs:
+        if leg.get("exit_price") is not None:
+            continue
+        q, closed = leg_qty(state, leg), leg.get("closed_qty", 0)
+        net = held.get(leg["tradingsymbol"], 0)
+        actual = max(net, 0) if leg["is_buy"] else max(-net, 0)
+        if actual < q - closed:
+            logger.critical("%s: account holds %d but %d expected -- the broker closed %d itself; "
+                            "closing only %d.", leg["tradingsymbol"], actual, q - closed, q - closed - actual, actual)
+            leg["qty"] = closed + actual
+            if leg["qty"] == closed:   # nothing left to close
+                leg["exit_price"] = leg["exit_value"] / closed if closed else leg["entry_price"]
 
 
 def position_mtm(kite, state: CondorState) -> float:
@@ -389,7 +418,12 @@ def exit_position(kite, state: CondorState, reason: str, dry_run: bool, state_pa
     it is known, and an unfilled remainder is retried (re-priced) up to
     EXIT_ATTEMPTS times. A short that cannot be closed stops the exit before
     any wing is sold. A rerun closes only what is still open; it never
-    re-trades quantity that is already flat."""
+    re-trades quantity that is already flat. Real runs first reconcile with
+    the broker's positions, so quantity the broker squared off itself is
+    never traded again."""
+    if not dry_run:
+        reconcile_with_broker(kite, state)
+        save_state(state, state_path)
     for leg in sorted(state.legs, key=lambda l: l["is_buy"]):  # False (short) sorts first
         if leg.get("exit_price") is not None:
             continue
