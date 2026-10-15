@@ -170,5 +170,63 @@ def main() -> None:
              "te_n", "te_days", "te_total", "te_avg", "te_win", "te_big"]].to_string(index=False))
 
 
+
+
+def regime_switch(t: pd.DataFrame, f: pd.DataFrame, cut, n: int, h: int, k: int, quiet_mode: str,
+                  h_today: int = 120) -> tuple[dict, dict, pd.DataFrame]:
+    """Market-type switch, decided before the open from the PREVIOUS n days:
+    'trending' if at least k of them had a first-hour range >= h points.
+    Trending -> take every base-rule trade from 09:35.
+    Quiet    -> 'filter': only trades after 10:15 on days whose own first hour >= h_today;
+                'skip': no trades."""
+    wide = (f["hour1_range"] >= h).astype(int)
+    trending = wide.rolling(n).sum().shift(1) >= k
+    x = t.join(trending.rename("trending"), on="day")
+    x = x[x.trending.notna()]
+    quiet_ok = (x.hour1_range >= h_today) & (x.entry_t >= "10:15") if quiet_mode == "filter" else False
+    sel = x[x.trending.astype(bool) | quiet_ok]
+    return summarize(sel[sel.day < cut]), summarize(sel[sel.day >= cut]), sel
+
+
+def regime_main() -> None:
+    import itertools
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--recent")
+    ap.add_argument("--vix")
+    ap.add_argument("--regime", action="store_true")
+    args = ap.parse_args()
+    d = load(args.recent)
+    t = trades(bars10(d))
+    f = day_features(d, None)
+    t = t.join(f, on="day")
+    days = sorted(f.index)
+    cut = days[int(len(days) * 2 / 3)]
+    rows = []
+    def add(name, tr, te):
+        rows.append(dict(version=name, tr_n=tr["n"], tr_total=round(tr["total"]), tr_avg=round(tr["avg"], 1),
+                         tr_win=f"{tr['win']:.0%}", te_n=te["n"], te_total=round(te["total"]), te_avg=round(te["avg"], 1),
+                         te_win=f"{te['win']:.0%}", all_total=round(tr["total"] + te["total"])))
+    add("plain rule (no switch)", summarize(t[t.day < cut]), summarize(t[t.day >= cut]))
+    flt = t[(t.hour1_range >= 120) & (t.entry_t >= "10:15")]
+    add("always first-hour filter (>=120)", summarize(flt[flt.day < cut]), summarize(flt[flt.day >= cut]))
+    for n, h, k, mode in itertools.product((5, 10), (100, 120, 150), (2, 3, 4), ("filter", "skip")):
+        if k > n:
+            continue
+        kk = k if n == 5 else k * 2
+        tr, te, _ = regime_switch(t, f, cut, n, h, kk, mode)
+        add(f"switch: {kk}/{n} prev days 1st-hr>={h}, quiet={mode}", tr, te)
+    r = pd.DataFrame(rows)
+    pd.set_option("display.width", 220)
+    print(f"{len(days)} days {days[0]}..{days[-1]}; train before {cut}, test from {cut}")
+    print(r.head(2).to_string(index=False))
+    sw = r.iloc[2:].sort_values("tr_total", ascending=False)
+    print(f"\n{len(sw)} switch variants; profitable in train {int((sw.tr_total > 0).sum())}, in BOTH {int(((sw.tr_total > 0) & (sw.te_total > 0)).sum())}; "
+          f"beat plain rule in BOTH periods: {int(((sw.tr_total > r.tr_total[0]) & (sw.te_total > r.te_total[0])).sum())}")
+    print("\nTop 10 switch variants by TRAIN total (TEST shows if it held up):")
+    print(sw.head(10).to_string(index=False))
+    sw.to_csv("reports/ribbon_regime_switch.csv", index=False)
+
+
 if __name__ == "__main__":
-    main()
+    import sys
+    regime_main() if "--regime" in sys.argv else main()
