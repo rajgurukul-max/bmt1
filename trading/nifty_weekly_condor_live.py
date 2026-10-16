@@ -147,9 +147,10 @@ def wait_until(t: time) -> None:
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--dry-run", action="store_true", help="Log intended orders without placing them.")
-    ap.add_argument("--action", choices=["auto", "status", "enter", "check", "monitor", "exit"], default="auto")
+    ap.add_argument("--action", choices=["auto", "status", "enter", "check", "monitor", "exit", "close-side"], default="auto")
     ap.add_argument("--until", default=None, help="HH:MM IST, for --action monitor")
     ap.add_argument("--poll-seconds", type=float, default=60.0)
+    ap.add_argument("--side", choices=["CE", "PE"], help="for --action close-side: which side to close")
     ap.add_argument("--entry-time", default=None,
                     help="HH:MM IST entry time for auto mode (default: ENTRY_TIME)")
     args = ap.parse_args()
@@ -179,7 +180,7 @@ def main() -> None:
     if args.action == "enter":
         enter_position(kite, args.dry_run)
         return
-    if args.action in ("check", "monitor", "exit") and state is None:
+    if args.action in ("check", "monitor", "exit", "close-side") and state is None:
         logger.info("No open position.")
         return
     if args.action == "check":
@@ -193,6 +194,11 @@ def main() -> None:
         return
     if args.action == "exit":
         core.exit_position(kite, state, "manual", args.dry_run, state_path, history_path)
+        return
+    if args.action == "close-side":
+        if not args.side:
+            raise SystemExit("--action close-side needs --side CE or --side PE")
+        core.close_side(kite, state, args.side, args.dry_run, state_path)
         return
 
     # auto: one process per trading day

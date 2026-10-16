@@ -411,20 +411,10 @@ def monitor_until(kite, state: CondorState, threshold: float | None, until: time
         time_module.sleep(poll_seconds)
 
 
-def exit_position(kite, state: CondorState, reason: str, dry_run: bool, state_path: Path, history_path: Path) -> float:
-    """Close all open legs (shorts first -- they carry the uncapped side), record
-    the round trip in history, clear state. Returns net P&L in rupees. Every
-    fill -- including part of an order -- is saved to the state file as soon as
-    it is known, and an unfilled remainder is retried (re-priced) up to
-    EXIT_ATTEMPTS times. A short that cannot be closed stops the exit before
-    any wing is sold. A rerun closes only what is still open; it never
-    re-trades quantity that is already flat. Real runs first reconcile with
-    the broker's positions, so quantity the broker squared off itself is
-    never traded again."""
-    if not dry_run:
-        reconcile_with_broker(kite, state)
-        save_state(state, state_path)
-    for leg in sorted(state.legs, key=lambda l: l["is_buy"]):  # False (short) sorts first
+def close_legs(kite, state: CondorState, legs: list, dry_run: bool, state_path: Path) -> None:
+    """Close the given legs (shorts first), saving every fill to the state
+    file; legs already closed are skipped. See exit_position."""
+    for leg in sorted(legs, key=lambda l: l["is_buy"]):  # False (short) sorts first
         if leg.get("exit_price") is not None:
             continue
         q = leg_qty(state, leg)
@@ -449,6 +439,37 @@ def exit_position(kite, state: CondorState, reason: str, dry_run: bool, state_pa
             raise RuntimeError(
                 f"Could not close {leg['tradingsymbol']}: {q - leg.get('closed_qty', 0)} of {q} still open after "
                 f"{EXIT_ATTEMPTS} attempts. MANUAL ACTION: check Positions; rerun --action exit to close the rest.")
+
+
+
+def close_side(kite, state: CondorState, opt_type: str, dry_run: bool, state_path: Path) -> None:
+    """Close only the CE or PE side (its short first, then its wing) and keep
+    the other side open. Closed legs keep their exit price, so the live MTM,
+    the stop and the final history row all include the booked profit/loss."""
+    if not dry_run:
+        reconcile_with_broker(kite, state)
+        save_state(state, state_path)
+    side = [l for l in state.legs if l["opt_type"] == opt_type]
+    close_legs(kite, state, side, dry_run, state_path)
+    booked = sum((l["exit_price"] - l["entry_price"]) * (1 if l["is_buy"] else -1) * leg_qty(state, l) for l in side)
+    logger.info("Closed the %s side: booked Rs %.0f before charges; %s side still open.", opt_type, booked,
+                "CE" if opt_type == "PE" else "PE")
+
+
+def exit_position(kite, state: CondorState, reason: str, dry_run: bool, state_path: Path, history_path: Path) -> float:
+    """Close all open legs (shorts first -- they carry the uncapped side), record
+    the round trip in history, clear state. Returns net P&L in rupees. Every
+    fill -- including part of an order -- is saved to the state file as soon as
+    it is known, and an unfilled remainder is retried (re-priced) up to
+    EXIT_ATTEMPTS times. A short that cannot be closed stops the exit before
+    any wing is sold. A rerun closes only what is still open; it never
+    re-trades quantity that is already flat. Real runs first reconcile with
+    the broker's positions, so quantity the broker squared off itself is
+    never traded again."""
+    if not dry_run:
+        reconcile_with_broker(kite, state)
+        save_state(state, state_path)
+    close_legs(kite, state, state.legs, dry_run, state_path)
 
     gross = charges = 0.0
     for leg in state.legs:
