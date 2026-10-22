@@ -162,8 +162,27 @@ class OptionTrader:
                          f"(stop / EMA21 / 15:10).")
         return t
 
+    def held(self, symbol: str) -> int | None:
+        """MIS quantity of `symbol` in the account now, None if Kite can't say."""
+        try:
+            return sum(int(p["quantity"]) for p in self.kite.positions()["net"]
+                       if p["tradingsymbol"] == symbol and p.get("product") == "MIS")
+        except Exception as exc:
+            logger.warning("Could not read positions (%s) -- selling the recorded quantity.", exc)
+            return None
+
     def exit(self, t: dict, why: str) -> bool:
         """Sell what is left; True when flat. Called again on later polls if not."""
+        if t["live"] and t["left"] > 0:
+            held = self.held(t["symbol"])
+            if held is not None and held < t["left"]:      # you sold some/all yourself in Kite
+                done = t["left"] - max(held, 0)
+                t["left"], t["qty"] = max(held, 0), t["qty"] - done
+                self.alerts.send("INFO", f"{done} {t['symbol']} already sold in Kite",
+                                 f"Selling only the {t['left']} still held." if t["left"] else
+                                 "Nothing left to sell -- that trade's P&L is in Kite, not in this log.")
+                if t["qty"] == 0:
+                    return True
         for _ in range(EXIT_TRIES):
             if t["left"] <= 0:
                 break
