@@ -175,7 +175,8 @@ def _last_status(kite, order_id: str) -> dict | None:
         return None
 
 
-def place_and_wait(kite, tradingsymbol: str, is_buy: bool, qty: int, dry_run: bool) -> tuple[str | None, float]:
+def place_and_wait(kite, tradingsymbol: str, is_buy: bool, qty: int, dry_run: bool,
+                   product: str | None = None) -> tuple[str | None, float]:
     ltp = get_ltps(kite, [tradingsymbol])[tradingsymbol]
     buffer = max(ltp * 0.02, 0.05)
     limit_price = round((ltp + buffer if is_buy else max(ltp - buffer, 0.05)) / 0.05) * 0.05
@@ -188,7 +189,7 @@ def place_and_wait(kite, tradingsymbol: str, is_buy: bool, qty: int, dry_run: bo
 
     order_id = kite.place_order(
         variety=kite.VARIETY_REGULAR, exchange=EXCHANGE, tradingsymbol=tradingsymbol,
-        transaction_type=transaction_type, quantity=qty, product=kite.PRODUCT_NRML,
+        transaction_type=transaction_type, quantity=qty, product=product or kite.PRODUCT_NRML,
         order_type=kite.ORDER_TYPE_LIMIT, price=limit_price,
     )
     logger.info("Placed order_id=%s %s %s qty=%d limit=%.2f", order_id, transaction_type, tradingsymbol, qty, limit_price)
