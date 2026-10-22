@@ -6,7 +6,9 @@ Rule (10-minute candles, same code as ribbon_trend_backtest.py):
   SELL  close < EMA9 < EMA21 < EMA50, RSI(14) < 40, MACD histogram < 0 and falling
   STOP  60 Nifty points from the signal price
   EXIT  a 10-min candle closes back through EMA21, the stop is touched, or 15:10
-  Entries 09:35-14:30, at most 2 signals a day.
+  Entries 09:35-14:30, at most 2 signals a day. After a stop-loss, no more
+  signals in that same direction for the rest of the day (1-year test: total
+  +2,237 -> +2,457 pts, max drawdown 442 -> 380, better in both halves).
 Market-type switch, decided at the open from the previous 5 days:
   TRENDING (4+ of them had a first hour >= 120 pts) -> signals from 09:35
   QUIET    -> signals only after 10:15, and only if TODAY's first hour >= 120 pts
@@ -83,7 +85,8 @@ class Engine:
     def _today(self, day: str) -> dict:
         if self.s.get("day") != day:
             self.s = {"day": day, "signals": 0, "pos": None, "last_bar": None, "announced": False,
-                      "hour1_announced": False}
+                      "hour1_announced": False,
+                      "stopped": [], "block_announced": []}
         return self.s
 
     def step(self, now: datetime, five_min: pd.DataFrame, ltp: float | None) -> None:
@@ -121,6 +124,7 @@ class Engine:
             side = pos["side"]
             if (side > 0 and ltp <= pos["stop"]) or (side < 0 and ltp >= pos["stop"]):
                 self._exit(st, ltp, f"STOP HIT at {ltp:.0f} (stop {pos['stop']:.0f})")
+                st.setdefault("stopped", []).append(side)
                 return
         if pos and now.strftime("%H:%M") >= EXIT_HHMM:
             self._exit(st, ltp if ltp is not None else float(today_bars.close.iloc[-1]), "15:10 time exit")
@@ -149,6 +153,14 @@ class Engine:
         if not (lg or sh):
             return
         side = 1 if lg else -1
+        if side in st.setdefault("stopped", []):
+            if side not in st.setdefault("block_announced", []):
+                st["block_announced"].append(side)
+                what = "BUY" if side > 0 else "SELL"
+                self.alerts.send("INFO", f"{what} signal skipped at {last.close:.0f}",
+                                 f"A {what} already hit its stop today -- no more {what}s today "
+                                 f"(the opposite side is still allowed).")
+            return
         px = float(last.close)
         stop = px - side * STOP_PTS
         st["pos"] = {"side": side, "entry": px, "stop": stop, "time": now.strftime("%H:%M")}
