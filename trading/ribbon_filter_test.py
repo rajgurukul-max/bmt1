@@ -27,6 +27,7 @@ Data (pick one):
 Default: data_cache/NIFTY50_5minute_1y.csv, else data_cache/"NIFTY 50_NSE_5minute.csv".
 
 Usage on the VPS:  ~/venv/bin/python ribbon_filter_test.py --download
+         RSI levels:  ~/venv/bin/python ribbon_filter_test.py --rsi   (uses the cached year)
 """
 from __future__ import annotations
 
@@ -82,7 +83,8 @@ def load_yahoo(path: str) -> pd.DataFrame:
                          "high": q["high"], "low": q["low"], "close": q["close"]})
 
 
-def simulate(d: pd.DataFrame, after_stop: str | None = None, near: float | None = None) -> pd.DataFrame:
+def simulate(d: pd.DataFrame, after_stop: str | None = None, near: float | None = None,
+             rsi_buy: float = 60, rsi_sell: float = 40) -> pd.DataFrame:
     """Live-rule trades with optional filters. after_stop in (None, 'same', 'all')."""
     b = rb.bars10(d)
     h1 = rb.day_features(d, None)["hour1_range"]
@@ -124,8 +126,8 @@ def simulate(d: pd.DataFrame, after_stop: str | None = None, near: float | None 
             continue
         if not trending.get(day, False) and not (hhmm >= "10:15" and h1.get(day, 0) >= FIRST_HOUR_MIN):
             continue
-        lg = r["close"] > r["e9"] > r["e21"] > r["e50"] and r["rsi"] > 60 and r["mh"] > 0 and r["mh"] > p["mh"]
-        sh = r["close"] < r["e9"] < r["e21"] < r["e50"] and r["rsi"] < 40 and r["mh"] < 0 and r["mh"] < p["mh"]
+        lg = r["close"] > r["e9"] > r["e21"] > r["e50"] and r["rsi"] > rsi_buy and r["mh"] > 0 and r["mh"] > p["mh"]
+        sh = r["close"] < r["e9"] < r["e21"] < r["e50"] and r["rsi"] < rsi_sell and r["mh"] < 0 and r["mh"] < p["mh"]
         if not (lg or sh):
             continue
         side = 1 if lg else -1
@@ -153,6 +155,7 @@ def main() -> None:
     ap.add_argument("--download", action="store_true")
     ap.add_argument("--csv")
     ap.add_argument("--yahoo")
+    ap.add_argument("--rsi", action="store_true", help="compare RSI levels instead of filters A/B")
     args = ap.parse_args()
     if args.download:
         raw = download()
@@ -164,13 +167,18 @@ def main() -> None:
     d = normalize(raw)
     days = sorted(set(d.ts.dt.date))
     cut = days[int(len(days) * 2 / 3)]
-    variants = [("BASE (live rule today)", None, None)]
-    variants += [(f"A: after a stop, block {m}", m, None) for m in ("same", "all")]
-    variants += [(f"B: skip {x} pts above the low / below the high", None, x) for x in (30, 50, 75, 100)]
-    variants += [(f"A({m}) + B({x})", m, x) for m in ("same", "all") for x in (50, 75)]
+    if args.rsi:
+        variants = [(f"RSI {hi}/{lo}" + (" + A (LIVE NOW)" if (hi, a) == (60, "same") else " + A" if a else ""),
+                     a, None, hi, lo)
+                    for a in ("same", None) for hi, lo in ((65, 35), (60, 40), (58, 42), (55, 45), (52, 48))]
+    else:
+        variants = [("BASE (live rule today)", None, None, 60, 40)]
+        variants += [(f"A: after a stop, block {m}", m, None, 60, 40) for m in ("same", "all")]
+        variants += [(f"B: skip {x} pts above the low / below the high", None, x, 60, 40) for x in (30, 50, 75, 100)]
+        variants += [(f"A({m}) + B({x})", m, x, 60, 40) for m in ("same", "all") for x in (50, 75)]
     rows = []
-    for name, m, x in variants:
-        t = simulate(d, m, x)
+    for name, m, x, hi, lo in variants:
+        t = simulate(d, m, x, hi, lo)
         a, tr, te = stats(t), stats(t[t.day < cut]), stats(t[t.day >= cut])
         rows.append({"version": name, **a, "first2/3": tr["total"], "last1/3": te["total"]})
     pd.set_option("display.width", 200)
