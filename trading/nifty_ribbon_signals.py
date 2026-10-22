@@ -2,8 +2,8 @@
 the market-type switch. SIGNALS ONLY -- this script never places orders.
 
 Rule (10-minute candles, same code as ribbon_trend_backtest.py):
-  BUY   close > EMA9 > EMA21 > EMA50, RSI(14) > 60, MACD histogram > 0 and rising
-  SELL  close < EMA9 < EMA21 < EMA50, RSI(14) < 40, MACD histogram < 0 and falling
+  BUY   close > EMA9 > EMA21 > EMA50, RSI(14) > 55, MACD histogram > 0 and rising
+  SELL  close < EMA9 < EMA21 < EMA50, RSI(14) < 45, MACD histogram < 0 and falling
   STOP  60 Nifty points from the signal price
   EXIT  a 10-min candle closes back through EMA21, the stop is touched, or 15:10
   Entries 09:35-14:30, at most 2 signals a day. After a stop-loss, no more
@@ -44,6 +44,7 @@ NIFTY_TOKEN = 256265          # NSE:NIFTY 50 index
 STATE_FILE = BASE_DIR / "logs" / "ribbon_signal_state.json"
 SIGNALS_CSV = BASE_DIR / "logs" / "ribbon_signals.csv"
 STOP_PTS = 60.0
+RSI_BUY, RSI_SELL = 55.0, 45.0   # trial since 23 Oct 2026; the backtested rule used 60/40
 FIRST_HOUR_MIN = 120.0
 TREND_DAYS, TREND_NEEDED = 5, 4
 MAX_SIGNALS = 2
@@ -148,8 +149,8 @@ class Engine:
             return
         if not trending and not (hhmm >= "10:15" and h1 is not None and h1 >= FIRST_HOUR_MIN):
             return
-        lg = last.close > last.e9 > last.e21 > last.e50 and last.rsi > 60 and last.mh > 0 and last.mh > prevb.mh
-        sh = last.close < last.e9 < last.e21 < last.e50 and last.rsi < 40 and last.mh < 0 and last.mh < prevb.mh
+        lg = last.close > last.e9 > last.e21 > last.e50 and last.rsi > RSI_BUY and last.mh > 0 and last.mh > prevb.mh
+        sh = last.close < last.e9 < last.e21 < last.e50 and last.rsi < RSI_SELL and last.mh < 0 and last.mh < prevb.mh
         if not (lg or sh):
             return
         side = 1 if lg else -1
