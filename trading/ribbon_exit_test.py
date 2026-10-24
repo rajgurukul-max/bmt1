@@ -16,6 +16,7 @@ Data: data_cache/NIFTY50_5minute_1y.csv (saved by ribbon_filter_test.py
 --download), extended with the last days from Yahoo (no login needed).
 
 Usage on the VPS:  ~/venv/bin/python ribbon_exit_test.py
+                   ~/venv/bin/python ribbon_exit_test.py --reentry   (re-entry rules, live exit)
 """
 from __future__ import annotations
 
@@ -43,7 +44,10 @@ def yahoo_recent() -> pd.DataFrame | None:
 
 
 def simulate(d: pd.DataFrame, exit_mode: str = "close", touch_buf: float = 0.0,
-             trail: tuple[float, float] | None = None, be: float | None = None) -> pd.DataFrame:
+             trail: tuple[float, float] | None = None, be: float | None = None,
+             after_stop: str = "same", max_signals: int = MAX_SIGNALS) -> pd.DataFrame:
+    """after_stop: 'same' = no more signals that direction after a stop-loss (live),
+    'all' = no more signals at all after a stop-loss, 'none' = no block."""
     b = rb.bars10(d)
     b["done"] = b.ts + pd.Timedelta(minutes=10)
     h1 = rb.day_features(d, None)["hour1_range"]
@@ -68,12 +72,13 @@ def simulate(d: pd.DataFrame, exit_mode: str = "close", touch_buf: float = 0.0,
                                 pts=(last.close - pos["entry"]) * pos["side"] - COST))
                 pos = None
             elif not pos and prev is not None and last.day == day and known.get(day, False) \
-                    and "09:35" <= last.hhmm < "14:30" and st["n"] < MAX_SIGNALS \
+                    and "09:35" <= last.hhmm < "14:30" and st["n"] < max_signals \
                     and (trending.get(day, False) or (last.hhmm >= "10:15" and h1.get(day, 0) >= ft.FIRST_HOUR_MIN)):
                 lg = last.close > last.e9 > last.e21 > last.e50 and last.rsi > 60 and last.mh > 0 and last.mh > prev.mh
                 sh = last.close < last.e9 < last.e21 < last.e50 and last.rsi < 40 and last.mh < 0 and last.mh < prev.mh
                 side = 1 if lg else -1 if sh else 0
-                if side and side not in st["stopped"]:
+                blocked = (after_stop == "same" and side in st["stopped"]) or (after_stop == "all" and st["stopped"])
+                if side and not blocked:
                     pos = dict(side=side, entry=last.close, best=last.close, day=day,
                                stop=last.close - side * STOP)
                     st["n"] += 1
@@ -110,6 +115,8 @@ def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--csv")
     ap.add_argument("--yahoo", help="Yahoo chart JSON only (60 days, quick check)")
+    ap.add_argument("--reentry", action="store_true",
+                    help="with the live exit, compare re-entry rules after a stop-loss")
     args = ap.parse_args()
     if args.yahoo:
         d = ft.normalize(ft.load_yahoo(args.yahoo))
@@ -119,8 +126,15 @@ def main() -> None:
         if y is not None:
             y = ft.normalize(y)
             d = pd.concat([d, y[y.ts > d.ts.max()]], ignore_index=True)
-    days = sorted(set(d.ts.dt.date))
-    cut = days[int(len(days) * 2 / 3)]
+    live = dict(exit_mode="touch", touch_buf=20)
+    if args.reentry:
+        variants = [("after stop: block same side (LIVE NOW)", live)]
+        variants += [("after stop: 2 trades same side allowed", {**live, "after_stop": "none"})]
+        variants += [("after stop: stop for the day", {**live, "after_stop": "all"})]
+        variants += [("no block, max 3 a day", {**live, "after_stop": "none", "max_signals": 3})]
+        variants += [("block same side, max 3 a day", {**live, "max_signals": 3})]
+        variants += [("max 1 trade a day", {**live, "max_signals": 1})]
+        return report(d, variants)
     variants = [("close through EMA21 (old rule)", dict())]
     variants += [(f"touch EMA21 +{n}" + (" (LIVE NOW)" if n == 20 else ""), dict(exit_mode="touch", touch_buf=n))
                  for n in (0, 10, 20, 30, 40)]
@@ -129,6 +143,12 @@ def main() -> None:
     variants += [(f"close + breakeven at {x}", dict(be=x)) for x in (40, 60, 80)]
     variants += [(f"touch +10 + trail {x}/{y}", dict(exit_mode="touch", touch_buf=10, trail=(x, y)))
                  for x, y in ((100, 60), (150, 100))]
+    report(d, variants)
+
+
+def report(d: pd.DataFrame, variants: list) -> None:
+    days = sorted(set(d.ts.dt.date))
+    cut = days[int(len(days) * 2 / 3)]
     rows, last_day = [], days[-1]
     for name, kw in variants:
         t = simulate(d, **kw)
