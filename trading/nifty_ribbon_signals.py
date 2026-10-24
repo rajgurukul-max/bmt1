@@ -5,7 +5,10 @@ Rule (10-minute candles, same code as ribbon_trend_backtest.py):
   BUY   close > EMA9 > EMA21 > EMA50, RSI(14) > 60, MACD histogram > 0 and rising
   SELL  close < EMA9 < EMA21 < EMA50, RSI(14) < 40, MACD histogram < 0 and falling
   STOP  60 Nifty points from the signal price
-  EXIT  a 10-min candle closes back through EMA21, the stop is touched, or 15:10
+  EXIT  price trades 20 pts back through EMA21 (EMA21 of the last finished
+        10-min candle; checked every poll, no waiting for the candle close), the
+        stop is touched, or 15:10. 1-year test: +2,955 pts vs +2,559 for the old
+        "candle closes through EMA21" exit, better in both halves of the year.
   Entries 09:35-14:30, at most 2 signals a day. After a stop-loss, no more
   signals in that same direction for the rest of the day (1-year test: total
   +2,237 -> +2,457 pts, max drawdown 442 -> 380, better in both halves).
@@ -56,6 +59,7 @@ KILL_SWITCH = BASE_DIR / "RIBBON_KILL_SWITCH"
 CONDOR_STATE = BASE_DIR / "nifty_condor_state.json"
 EXIT_TRIES = 3
 STOP_PTS = 60.0
+EMA_EXIT_BUFFER = 20.0        # exit when price is this far through EMA21
 RSI_BUY, RSI_SELL = 60.0, 40.0   # 1-year test: 55/45 made 167 pts less (2,290 vs 2,457)
 FIRST_HOUR_MIN = 120.0
 TREND_DAYS, TREND_NEEDED = 5, 4
@@ -272,6 +276,13 @@ class Engine:
                 self._exit(st, ltp, f"STOP HIT at {ltp:.0f} (stop {pos['stop']:.0f})")
                 st.setdefault("stopped", []).append(side)
                 return
+            if not b.empty:
+                e21 = float(b.iloc[-1].e21)
+                lvl = e21 - side * EMA_EXIT_BUFFER
+                if (side > 0 and ltp <= lvl) or (side < 0 and ltp >= lvl):
+                    self._exit(st, ltp, f"Price {ltp:.0f} went {EMA_EXIT_BUFFER:.0f} pts "
+                                        f"{'below' if side > 0 else 'above'} EMA21 ({e21:.0f})")
+                    return
         if pos and now.strftime("%H:%M") >= EXIT_HHMM:
             self._exit(st, ltp if ltp is not None else float(today_bars.close.iloc[-1]), "15:10 time exit")
             return
@@ -284,10 +295,6 @@ class Engine:
         st["last_bar"] = str(last.ts)
         prevb = b.iloc[-2]
         if pos:
-            side = pos["side"]
-            if (side > 0 and last.close < last.e21) or (side < 0 and last.close > last.e21):
-                self._exit(st, float(last.close), f"10-min candle closed {'below' if side > 0 else 'above'} "
-                                                   f"EMA21 ({last.e21:.0f})")
             return
         hhmm = last.hhmm
         if not ("09:35" <= hhmm < "14:30") or st["signals"] >= MAX_SIGNALS or st.get("trade"):
@@ -315,8 +322,9 @@ class Engine:
         self.alerts.send(what, f"Nifty {what} at {px:.0f}  (signal {st['signals']}/{MAX_SIGNALS} today)",
                          f"Candle {hhmm}: close {px:.0f}, EMA9/21/50 {last.e9:.0f}/{last.e21:.0f}/{last.e50:.0f}, "
                          f"RSI {last.rsi:.0f}, MACD hist {last.mh:+.1f}\n"
-                         f"STOP {stop:.0f} ({STOP_PTS:.0f} pts). Exit when a 10-min candle closes "
-                         f"{'below' if side > 0 else 'above'} EMA21 (now {last.e21:.0f}), or at 15:10.\n"
+                         f"STOP {stop:.0f} ({STOP_PTS:.0f} pts). Exit if price goes {EMA_EXIT_BUFFER:.0f} pts "
+                         f"{'below' if side > 0 else 'above'} EMA21 (now {last.e21:.0f} -> exit at "
+                         f"{last.e21 - side * EMA_EXIT_BUFFER:.0f}, moves with EMA21), or at 15:10.\n"
                          f"Futures: {'buy' if side > 0 else 'sell'} Nifty fut | Options: buy ATM "
                          f"{'CE' if side > 0 else 'PE'}.")
         if self.trader:

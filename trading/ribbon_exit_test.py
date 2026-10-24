@@ -121,8 +121,9 @@ def main() -> None:
             d = pd.concat([d, y[y.ts > d.ts.max()]], ignore_index=True)
     days = sorted(set(d.ts.dt.date))
     cut = days[int(len(days) * 2 / 3)]
-    variants = [("close through EMA21 (LIVE NOW)", dict())]
-    variants += [(f"touch EMA21 +{n}", dict(exit_mode="touch", touch_buf=n)) for n in (0, 10, 20)]
+    variants = [("close through EMA21 (old rule)", dict())]
+    variants += [(f"touch EMA21 +{n}" + (" (LIVE NOW)" if n == 20 else ""), dict(exit_mode="touch", touch_buf=n))
+                 for n in (0, 10, 20, 30, 40)]
     variants += [(f"close + trail {x}/{y}", dict(trail=(x, y))) for x, y in
                  ((60, 40), (80, 60), (100, 60), (100, 80), (150, 80), (150, 100))]
     variants += [(f"close + breakeven at {x}", dict(be=x)) for x in (40, 60, 80)]
