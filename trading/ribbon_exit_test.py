@@ -47,7 +47,8 @@ def simulate(d: pd.DataFrame, exit_mode: str = "close", touch_buf: float = 0.0,
              trail: tuple[float, float] | None = None, be: float | None = None,
              after_stop: str = "same", max_signals: int = MAX_SIGNALS) -> pd.DataFrame:
     """after_stop: 'same' = no more signals that direction after a stop-loss (live),
-    'all' = no more signals at all after a stop-loss, 'none' = no block."""
+    'all' = no more signals at all after a stop-loss, 'none' = no block,
+    'once' = one trade per direction per day, whatever its result."""
     b = rb.bars10(d)
     b["done"] = b.ts + pd.Timedelta(minutes=10)
     h1 = rb.day_features(d, None)["hour1_range"]
@@ -58,7 +59,7 @@ def simulate(d: pd.DataFrame, exit_mode: str = "close", touch_buf: float = 0.0,
     out, pos, day_st, last = [], None, {}, None
     for r in d.itertuples(index=False):
         t, day = r.ts, r.ts.date()
-        st = day_st.setdefault(day, {"n": 0, "stopped": set()})
+        st = day_st.setdefault(day, {"n": 0, "stopped": set(), "traded": set()})
         # 1) a 10-min candle finished at t: close-based exit, or a new signal
         if t in tenmin.index:
             prev, last = last, tenmin.loc[t]
@@ -77,11 +78,13 @@ def simulate(d: pd.DataFrame, exit_mode: str = "close", touch_buf: float = 0.0,
                 lg = last.close > last.e9 > last.e21 > last.e50 and last.rsi > 60 and last.mh > 0 and last.mh > prev.mh
                 sh = last.close < last.e9 < last.e21 < last.e50 and last.rsi < 40 and last.mh < 0 and last.mh < prev.mh
                 side = 1 if lg else -1 if sh else 0
-                blocked = (after_stop == "same" and side in st["stopped"]) or (after_stop == "all" and st["stopped"])
+                blocked = (after_stop == "same" and side in st["stopped"]) or (after_stop == "all" and st["stopped"]) \
+                    or (after_stop == "once" and side in st["traded"])
                 if side and not blocked:
                     pos = dict(side=side, entry=last.close, best=last.close, day=day,
                                stop=last.close - side * STOP)
                     st["n"] += 1
+                    st["traded"].add(side)
         prev_close = r.close
         if not pos or pos["day"] != day:
             continue
@@ -131,6 +134,7 @@ def main() -> None:
         variants = [("after stop: block same side (LIVE NOW)", live)]
         variants += [("after stop: 2 trades same side allowed", {**live, "after_stop": "none"})]
         variants += [("after stop: stop for the day", {**live, "after_stop": "all"})]
+        variants += [("1 trade per direction per day", {**live, "after_stop": "once"})]
         variants += [("no block, max 3 a day", {**live, "after_stop": "none", "max_signals": 3})]
         variants += [("block same side, max 3 a day", {**live, "max_signals": 3})]
         variants += [("max 1 trade a day", {**live, "max_signals": 1})]
