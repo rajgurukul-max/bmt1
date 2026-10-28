@@ -168,6 +168,15 @@ def main() -> None:
     kite = core.connect_when_token_valid() if args.action == "auto" else get_kite_client(cfg)
     state_path, history_path = paths(args.dry_run)
     state = core.load_state(state_path)
+    if state is not None and date.fromisoformat(state.expiry) < today():
+        # The contracts expired and the exchange settled them (cash) -- e.g. the
+        # process was killed before the 15:15 exit. Nothing can be traded any more;
+        # keep the record and free the slot so the next entry is not blocked.
+        archived = cfg.logging.log_dir / f"nifty_condor_state_expired_{state.expiry}.json"
+        state_path.replace(archived)
+        logger.critical("Position with expiry %s was never closed by this script -- it EXPIRED and was settled "
+                        "by the exchange. Check its P&L in Kite. State moved to %s.", state.expiry, archived)
+        state = None
     until = core.parse_hhmm(args.until) if args.until else None
 
     if args.action == "status":
