@@ -225,6 +225,29 @@ crontab -e
 `flock` stops a second copy starting if one is already running. On holidays
 listed in `nse_holidays.txt` both scripts exit immediately.
 
+**Small servers: add swap and a watchdog.** On a ~0.5 GB instance Linux killed
+the scripts for lack of memory (an open condor then went unmonitored and missed
+its 15:15 exit). Add 2 GB of swap once:
+
+```bash
+sudo fallocate -l 2G /swapfile && sudo chmod 600 /swapfile && sudo mkswap /swapfile && \
+  sudo swapon /swapfile && echo '/swapfile none swap sw 0 0' | sudo tee -a /etc/fstab
+```
+
+and restart lines that re-launch a killed process (the same `flock` lock means
+they do nothing while the main job runs). The condor watchdog only MONITORS an
+open position (`--action monitor`), it never enters one:
+
+```cron
+20-55/5 9 * * 1-5 cd /home/trader/bmt1/trading && flock -n /tmp/nifty_condor.lock venv/bin/python nifty_weekly_condor_live.py --action monitor >> logs/nifty_condor_cron.log 2>&1
+*/5 10-14 * * 1-5 cd /home/trader/bmt1/trading && flock -n /tmp/nifty_condor.lock venv/bin/python nifty_weekly_condor_live.py --action monitor >> logs/nifty_condor_cron.log 2>&1
+0-20/5 15 * * 1-5 cd /home/trader/bmt1/trading && flock -n /tmp/nifty_condor.lock venv/bin/python nifty_weekly_condor_live.py --action monitor >> logs/nifty_condor_cron.log 2>&1
+```
+
+A position whose expiry has passed (never closed by the script) is archived
+to `logs/nifty_condor_state_expired_<expiry>.json` on the next run, so it
+can't block the next entry -- check its settled P&L in Kite.
+
 ### Prove order placement works before real money (do this once)
 
 The account must have the margin in it, and the VPS IP must be whitelisted
