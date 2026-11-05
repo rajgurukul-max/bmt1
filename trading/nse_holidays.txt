@@ -2,3 +2,7 @@
 # Keep this current from NSE's official holiday list each year -- the Nifty
 # script uses it to move the Friday entry earlier when Friday is a holiday.
 2026-10-02  # Gandhi Jayanti (Friday) -> entry moves to Thursday 2026-10-01
+2026-10-20  # Dussehra (Tuesday) -> weekly expiry was Monday 2026-10-19
+2026-11-10  # Diwali Balipratipada (Tuesday) -> weekly expiry Monday 2026-11-09
+2026-11-24  # Guru Nanak Jayanti (Tuesday) -> weekly expiry Monday 2026-11-23
+2026-12-25  # Christmas (Friday) -> entry moves to Thursday 2026-12-24
