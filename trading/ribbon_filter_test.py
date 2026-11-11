@@ -47,25 +47,27 @@ STOP, COST, MAX_SIGNALS = 60.0, 2.0, 2
 FIRST_HOUR_MIN, TREND_DAYS, TREND_NEEDED = 120.0, 5, 4
 
 
-def download() -> pd.DataFrame:
+def download(index: str = "NSE:NIFTY 50", cache=None) -> pd.DataFrame:
+    """~1 year of 5-minute candles of an index from Kite (read-only), saved to `cache`."""
+    cache = cache or CACHE
     from dotenv import load_dotenv
 
     from config import load_config
     from data import get_kite_client
     load_dotenv(BASE_DIR / ".env", override=True)
     kite = get_kite_client(load_config())
-    kite.profile()                      # fails fast on a stale token
+    token = kite.ltp([index])[index]["instrument_token"]     # also fails fast on a stale token
     end = datetime.now()
     start, rows = end - timedelta(days=380), []
     while start < end:
         stop = min(start + timedelta(days=90), end)
         print(f"Fetching {start.date()} -> {stop.date()}")
-        rows += kite.historical_data(NIFTY_TOKEN, start, stop, "5minute")
+        rows += kite.historical_data(token, start, stop, "5minute")
         start = stop
     d = pd.DataFrame(rows).drop_duplicates("date")
-    CACHE.parent.mkdir(exist_ok=True)
-    d.to_csv(CACHE, index=False)
-    print(f"Saved {len(d)} candles to {CACHE}")
+    cache.parent.mkdir(exist_ok=True)
+    d.to_csv(cache, index=False)
+    print(f"Saved {len(d)} candles to {cache}")
     return d
 
 

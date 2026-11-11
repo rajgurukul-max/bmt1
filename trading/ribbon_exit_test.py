@@ -20,6 +20,8 @@ Usage on the VPS:  ~/venv/bin/python ribbon_exit_test.py
                    ~/venv/bin/python ribbon_exit_test.py --entry     (MACD vs Fisher Transform entry)
                    ~/venv/bin/python ribbon_exit_test.py --explore   (earlier entry / other exits / 5-min)
                    ~/venv/bin/python ribbon_exit_test.py --swing     (carry overnight, no 15:10 exit)
+Sensex (first time, after the morning login):  ... ribbon_exit_test.py --index sensex --download --swing
+       (later runs: drop --download; add --explore / --entry / --reentry / nothing for other tables)
 """
 from __future__ import annotations
 
@@ -33,10 +35,14 @@ import ribbon_trend_backtest as rb
 STOP, COST, MAX_SIGNALS = 60.0, 2.0, 2
 
 
-def yahoo_recent() -> pd.DataFrame | None:
+SENSEX_CACHE = ft.CACHE.with_name("SENSEX_5minute_1y.csv")
+SENSEX_SCALE = 3.2     # Sensex points per Nifty point (index ratio ~3.2); 1 Sensex lot (20) ~ 1 Nifty lot (65)
+
+
+def yahoo_recent(symbol: str = "%5ENSEI") -> pd.DataFrame | None:
     try:
         import requests
-        r = requests.get("https://query2.finance.yahoo.com/v8/finance/chart/%5ENSEI?range=60d&interval=5m",
+        r = requests.get(f"https://query2.finance.yahoo.com/v8/finance/chart/{symbol}?range=60d&interval=5m",
                          headers={"User-Agent": "Mozilla/5.0"}, timeout=20).json()["chart"]["result"][0]
         q = r["indicators"]["quote"][0]
         return pd.DataFrame({"ts": pd.to_datetime(r["timestamp"], unit="s", utc=True), "open": q["open"],
@@ -171,6 +177,11 @@ def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--csv")
     ap.add_argument("--yahoo", help="Yahoo chart JSON only (60 days, quick check)")
+    ap.add_argument("--index", choices=["nifty", "sensex"], default="nifty",
+                    help="sensex: same rule on the Sensex, prices divided by 3.2 so every point setting "
+                         "(60 stop, 20 EMA buffer, 120 first hour, trails) means the same %% move as on Nifty")
+    ap.add_argument("--download", action="store_true",
+                    help="(re)download the index's year of 5-min candles from Kite first (needs today's login)")
     ap.add_argument("--swing", action="store_true",
                     help="carry trades overnight (no 15:10 exit) with the live exits and wider variants")
     ap.add_argument("--explore", action="store_true",
@@ -180,14 +191,24 @@ def main() -> None:
     ap.add_argument("--reentry", action="store_true",
                     help="with the live exit, compare re-entry rules after a stop-loss")
     args = ap.parse_args()
+    sensex = args.index == "sensex"
     if args.yahoo:
         d = ft.normalize(ft.load_yahoo(args.yahoo))
     else:
-        d = ft.normalize(pd.read_csv(args.csv or (ft.CACHE if ft.CACHE.exists() else ft.OLD_CACHE)))
-        y = yahoo_recent()
+        cache = SENSEX_CACHE if sensex else (ft.CACHE if ft.CACHE.exists() else ft.OLD_CACHE)
+        if args.download:
+            ft.download("BSE:SENSEX" if sensex else "NSE:NIFTY 50", SENSEX_CACHE if sensex else ft.CACHE)
+        elif sensex and not cache.exists() and not args.csv:
+            raise SystemExit("No Sensex data yet -- run once with --download after the morning Kite login.")
+        d = ft.normalize(pd.read_csv(args.csv or cache))
+        y = yahoo_recent("%5EBSESN" if sensex else "%5ENSEI")
         if y is not None:
             y = ft.normalize(y)
             d = pd.concat([d, y[y.ts > d.ts.max()]], ignore_index=True)
+    if sensex:
+        d[["open", "high", "low", "close"]] /= SENSEX_SCALE
+        print(f"SENSEX, prices / {SENSEX_SCALE}: results are in NIFTY-EQUIVALENT points "
+              f"(x{SENSEX_SCALE} = Sensex points; x64 = rupees per Sensex lot of 20, about the same as a Nifty lot).")
     live = dict(exit_mode="touch", touch_buf=20)
     if args.swing:
         h = {**live, "hold": True}
