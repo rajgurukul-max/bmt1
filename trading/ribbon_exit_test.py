@@ -19,6 +19,7 @@ Usage on the VPS:  ~/venv/bin/python ribbon_exit_test.py
                    ~/venv/bin/python ribbon_exit_test.py --reentry   (re-entry rules, live exit)
                    ~/venv/bin/python ribbon_exit_test.py --entry     (MACD vs Fisher Transform entry)
                    ~/venv/bin/python ribbon_exit_test.py --explore   (earlier entry / other exits / 5-min)
+                   ~/venv/bin/python ribbon_exit_test.py --swing     (carry overnight, no 15:10 exit)
 """
 from __future__ import annotations
 
@@ -68,13 +69,17 @@ def simulate(d: pd.DataFrame, exit_mode: str = "close", touch_buf: float = 0.0,
              trail: tuple[float, float] | None = None, be: float | None = None,
              after_stop: str = "same", max_signals: int = MAX_SIGNALS, entry: str = "macd",
              tf: int = 10, stack: str = "9-21-50", ema9_buf: float | None = None, fisher_exit: bool = False,
-             target: float | None = None) -> pd.DataFrame:
+             target: float | None = None, hold: bool = False, stop_pts: float = STOP,
+             ema50_buf: float | None = None) -> pd.DataFrame:
     """after_stop: 'same' = no more signals that direction after a stop-loss (live),
     'all' = no more signals at all after a stop-loss, 'none' = no block,
     'once' = one trade per direction per day, whatever its result.
     tf: signal candle minutes (10 live, or 5). stack: "9-21-50" (live) or "9-21" (EMA50 not required).
     Extra exits: ema9_buf -> price goes that far through EMA9; fisher_exit -> a signal candle on which
-    the Fisher Transform crosses against the trade; target -> take profit at entry +/- target pts."""
+    the Fisher Transform crosses against the trade; target -> take profit at entry +/- target pts.
+    hold: carry the trade overnight -- no 15:10 exit; it ends only on the stop / EMA / trailing exits
+    (a gap through an exit level fills at the open). stop_pts: stop distance. ema50_buf: price goes
+    that far through EMA50."""
     b = rb.bars10(d, tf)
     b["done"] = b.ts + pd.Timedelta(minutes=tf)
     h1 = rb.day_features(d, None)["hour1_range"]
@@ -90,7 +95,7 @@ def simulate(d: pd.DataFrame, exit_mode: str = "close", touch_buf: float = 0.0,
         if t in tenmin.index:
             prev, last = last, tenmin.loc[t]
             recent = (recent + [last])[-3:]
-            if pos and pos["day"] != day:                                  # never hold overnight
+            if pos and pos["day"] != day and not hold:                     # intraday: never hold overnight
                 out.append(dict(day=pos["day"], side=pos["side"], why="eod",
                                 pts=(prev_close - pos["entry"]) * pos["side"] - COST))
                 pos = None
@@ -115,15 +120,15 @@ def simulate(d: pd.DataFrame, exit_mode: str = "close", touch_buf: float = 0.0,
                     or (after_stop == "once" and side in st["traded"])
                 if side and not blocked:
                     pos = dict(side=side, entry=last.close, best=last.close, day=day,
-                               stop=last.close - side * STOP)
+                               stop=last.close - side * stop_pts)
                     st["n"] += 1
                     st["traded"].add(side)
         prev_close = r.close
-        if not pos or pos["day"] != day:
+        if not pos or (pos["day"] != day and not hold):
             continue
         s = pos["side"]
         # 2) 15:10 exit at the price then
-        if r.ts.strftime("%H:%M") >= "15:10":
+        if not hold and r.ts.strftime("%H:%M") >= "15:10":
             out.append(dict(day=day, side=s, why="15:10", pts=(r.open - pos["entry"]) * s - COST))
             pos = None
             continue
@@ -133,13 +138,16 @@ def simulate(d: pd.DataFrame, exit_mode: str = "close", touch_buf: float = 0.0,
             levels.append((last.e21 - s * touch_buf, "touch"))
         if ema9_buf is not None and last is not None:
             levels.append((last.e9 - s * ema9_buf, "ema9"))
+        if ema50_buf is not None and last is not None:
+            levels.append((last.e50 - s * ema50_buf, "ema50"))
         if trail and (pos["best"] - pos["entry"]) * s >= trail[0]:
             levels.append((pos["best"] - s * trail[1], "trail"))
         lvl, why = max(levels, key=lambda x: x[0] * s)                    # nearest to price
         if (s > 0 and r.low <= lvl) or (s < 0 and r.high >= lvl):
             px = min(r.open, lvl) if s > 0 else max(r.open, lvl)            # a gap fills at the open
-            out.append(dict(day=day, side=s, why=why, pts=(px - pos["entry"]) * s - COST))
-            if why == "stop" and px * s <= (pos["entry"] - s * STOP) * s + 1e-9:
+            out.append(dict(day=day, side=s, why=why, pts=(px - pos["entry"]) * s - COST,
+                            nights=(day - pos["day"]).days))
+            if why == "stop" and px * s <= (pos["entry"] - s * stop_pts) * s + 1e-9:
                 st["stopped"].add(s)
             pos = None
             continue
@@ -153,13 +161,15 @@ def simulate(d: pd.DataFrame, exit_mode: str = "close", touch_buf: float = 0.0,
         pos["best"] = max(pos["best"], r.high) if s > 0 else min(pos["best"], r.low)
         if be and (pos["best"] - pos["entry"]) * s >= be:
             pos["stop"] = max(pos["stop"], pos["entry"]) if s > 0 else min(pos["stop"], pos["entry"])
-    return pd.DataFrame(out, columns=["day", "side", "pts", "why"])
+    return pd.DataFrame(out, columns=["day", "side", "pts", "why", "nights"]).fillna({"nights": 0})
 
 
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--csv")
     ap.add_argument("--yahoo", help="Yahoo chart JSON only (60 days, quick check)")
+    ap.add_argument("--swing", action="store_true",
+                    help="carry trades overnight (no 15:10 exit) with the live exits and wider variants")
     ap.add_argument("--explore", action="store_true",
                     help="earlier entries, Fisher/EMA9/trail/target exits and 5-minute candles vs the live rule")
     ap.add_argument("--entry", action="store_true",
@@ -176,6 +186,19 @@ def main() -> None:
             y = ft.normalize(y)
             d = pd.concat([d, y[y.ts > d.ts.max()]], ignore_index=True)
     live = dict(exit_mode="touch", touch_buf=20)
+    if args.swing:
+        h = {**live, "hold": True}
+        variants = [("INTRADAY (live): exit by 15:10", {**live, "trail": (150, 80)})]
+        variants += [("HOLD overnight, live exits + trail 150/80", {**h, "trail": (150, 80)})]
+        variants += [("HOLD, no trailing stop", h)]
+        variants += [(f"HOLD, trail {x}/{y}", {**h, "trail": (x, y)}) for x, y in ((200, 100), (300, 150), (400, 200))]
+        variants += [("HOLD, stop 100", {**h, "stop_pts": 100})]
+        variants += [("HOLD, stop 100 + trail 300/150", {**h, "stop_pts": 100, "trail": (300, 150)})]
+        variants += [("HOLD, exit 40 thru EMA21", {**h, "touch_buf": 40})]
+        variants += [("HOLD, exit 40 thru EMA21 + trail 300/150", {**h, "touch_buf": 40, "trail": (300, 150)})]
+        variants += [("HOLD, exit 20 thru EMA50", {"exit_mode": "none", "hold": True, "ema50_buf": 20})]
+        variants += [("HOLD, EMA50 exit + trail 300/150", {"exit_mode": "none", "hold": True, "ema50_buf": 20, "trail": (300, 150)})]
+        return report(d, variants, swing=True)
     if args.explore:
         variants = [("old: 10m, MACD, exit 20 thru EMA21", live)]
         variants += [("exit: Fisher turns against", {"exit_mode": "none", "fisher_exit": True})]
@@ -217,7 +240,7 @@ def main() -> None:
     report(d, variants)
 
 
-def report(d: pd.DataFrame, variants: list) -> None:
+def report(d: pd.DataFrame, variants: list, swing: bool = False) -> None:
     days = sorted(set(d.ts.dt.date))
     cut = days[int(len(days) * 2 / 3)]
     rows, last_day = [], days[-1]
@@ -225,8 +248,14 @@ def report(d: pd.DataFrame, variants: list) -> None:
         t = simulate(d, **kw)
         a, tr, te = ft.stats(t), ft.stats(t[t.day < cut]), ft.stats(t[t.day >= cut])
         ld = t[t.day == last_day]
-        rows.append({"exit": name, **a, "first2/3": tr["total"], "last1/3": te["total"],
-                     f"{last_day:%d%b}": " ".join(f"{p:+.0f}" for p in ld.pts) or "-"})
+        row = {"exit": name, **a, "first2/3": tr["total"], "last1/3": te["total"]}
+        if swing:
+            row.update({"worst_trade": round(t.pts.min()) if len(t) else 0, "best_trade": round(t.pts.max()) if len(t) else 0,
+                        "overnight%": f"{(t.nights > 0).mean():.0%}" if len(t) else "-",
+                        "max_nights": int(t.nights.max()) if len(t) else 0})
+        else:
+            row[f"{last_day:%d%b}"] = " ".join(f"{p:+.0f}" for p in ld.pts) or "-"
+        rows.append(row)
     pd.set_option("display.width", 220)
     print(f"\n{len(days)} days {days[0]} .. {days[-1]} (split at {cut}); points per 1 Nifty unit, after 2 pts cost")
     print(pd.DataFrame(rows).to_string(index=False))
