@@ -17,6 +17,7 @@ Data: data_cache/NIFTY50_5minute_1y.csv (saved by ribbon_filter_test.py
 
 Usage on the VPS:  ~/venv/bin/python ribbon_exit_test.py
                    ~/venv/bin/python ribbon_exit_test.py --reentry   (re-entry rules, live exit)
+                   ~/venv/bin/python ribbon_exit_test.py --entry     (MACD vs Fisher Transform entry)
 """
 from __future__ import annotations
 
@@ -43,9 +44,26 @@ def yahoo_recent() -> pd.DataFrame | None:
         return None
 
 
+def momentum(entry: str, s: int, last, prev, recent: list) -> bool:
+    """The momentum condition on top of the EMA stack + RSI.
+    macd          MACD histogram on the signal side and growing (LIVE rule)
+    fisher_cross  Fisher Transform crossed its trigger in the signal direction on this candle
+    fisher_cross3 ... on this candle or one of the 2 before
+    fisher_state  Fisher above its trigger (buy) / below it (sell)
+    none          no momentum condition"""
+    if entry == "none":
+        return True
+    if entry == "macd":
+        return last.mh * s > 0 and (last.mh - prev.mh) * s > 0
+    if entry == "fisher_state":
+        return (last.fish - last.fish_trig) * s > 0
+    bars = [last] if entry == "fisher_cross" else recent
+    return any(b.fish_x == s for b in bars) and (last.fish - last.fish_trig) * s > 0
+
+
 def simulate(d: pd.DataFrame, exit_mode: str = "close", touch_buf: float = 0.0,
              trail: tuple[float, float] | None = None, be: float | None = None,
-             after_stop: str = "same", max_signals: int = MAX_SIGNALS) -> pd.DataFrame:
+             after_stop: str = "same", max_signals: int = MAX_SIGNALS, entry: str = "macd") -> pd.DataFrame:
     """after_stop: 'same' = no more signals that direction after a stop-loss (live),
     'all' = no more signals at all after a stop-loss, 'none' = no block,
     'once' = one trade per direction per day, whatever its result."""
@@ -56,13 +74,14 @@ def simulate(d: pd.DataFrame, exit_mode: str = "close", touch_buf: float = 0.0,
     trending = wide.rolling(ft.TREND_DAYS).sum().shift(1) >= ft.TREND_NEEDED
     known = wide.rolling(ft.TREND_DAYS).count().shift(1) >= ft.TREND_DAYS
     tenmin = b.set_index("done")
-    out, pos, day_st, last = [], None, {}, None
+    out, pos, day_st, last, recent = [], None, {}, None, []
     for r in d.itertuples(index=False):
         t, day = r.ts, r.ts.date()
         st = day_st.setdefault(day, {"n": 0, "stopped": set(), "traded": set()})
         # 1) a 10-min candle finished at t: close-based exit, or a new signal
         if t in tenmin.index:
             prev, last = last, tenmin.loc[t]
+            recent = (recent + [last])[-3:]
             if pos and pos["day"] != day:                                  # never hold overnight
                 out.append(dict(day=pos["day"], side=pos["side"], why="eod",
                                 pts=(prev_close - pos["entry"]) * pos["side"] - COST))
@@ -75,8 +94,9 @@ def simulate(d: pd.DataFrame, exit_mode: str = "close", touch_buf: float = 0.0,
             elif not pos and prev is not None and last.day == day and known.get(day, False) \
                     and "09:35" <= last.hhmm < "14:30" and st["n"] < max_signals \
                     and (trending.get(day, False) or (last.hhmm >= "10:15" and h1.get(day, 0) >= ft.FIRST_HOUR_MIN)):
-                lg = last.close > last.e9 > last.e21 > last.e50 and last.rsi > 60 and last.mh > 0 and last.mh > prev.mh
-                sh = last.close < last.e9 < last.e21 < last.e50 and last.rsi < 40 and last.mh < 0 and last.mh < prev.mh
+                up = last.close > last.e9 > last.e21 > last.e50 and last.rsi > 60
+                dn = last.close < last.e9 < last.e21 < last.e50 and last.rsi < 40
+                lg, sh = up and momentum(entry, 1, last, prev, recent), dn and momentum(entry, -1, last, prev, recent)
                 side = 1 if lg else -1 if sh else 0
                 blocked = (after_stop == "same" and side in st["stopped"]) or (after_stop == "all" and st["stopped"]) \
                     or (after_stop == "once" and side in st["traded"])
@@ -118,6 +138,8 @@ def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--csv")
     ap.add_argument("--yahoo", help="Yahoo chart JSON only (60 days, quick check)")
+    ap.add_argument("--entry", action="store_true",
+                    help="with the live exit, compare MACD vs Ehlers Fisher Transform as the entry momentum check")
     ap.add_argument("--reentry", action="store_true",
                     help="with the live exit, compare re-entry rules after a stop-loss")
     args = ap.parse_args()
@@ -130,6 +152,10 @@ def main() -> None:
             y = ft.normalize(y)
             d = pd.concat([d, y[y.ts > d.ts.max()]], ignore_index=True)
     live = dict(exit_mode="touch", touch_buf=20)
+    if args.entry:
+        variants = [(f"{e}" + (" (LIVE NOW)" if e == "macd" else ""), {**live, "entry": e})
+                    for e in ("macd", "fisher_cross", "fisher_cross3", "fisher_state", "none")]
+        return report(d, variants)
     if args.reentry:
         variants = [("after stop: block same side (LIVE NOW)", live)]
         variants += [("after stop: 2 trades same side allowed", {**live, "after_stop": "none"})]

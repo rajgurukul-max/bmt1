@@ -55,7 +55,33 @@ def bars10(d: pd.DataFrame) -> pd.DataFrame:
     b["rsi"] = 100 - 100 / (1 + up / dn)
     macd = c.ewm(span=12, adjust=False).mean() - c.ewm(span=26, adjust=False).mean()
     b["mh"] = macd - macd.ewm(span=9, adjust=False).mean()
+    b["fish"], b["fish_trig"] = fisher(b.high, b.low)
+    above = b.fish > b.fish_trig
+    was_above = above.shift(1, fill_value=False)
+    # +1 on the candle Fisher crosses above its trigger, -1 when it crosses below
+    b["fish_x"] = (above & ~was_above).astype(int) - (~above & was_above & b.fish_trig.notna()).astype(int)
     return b
+
+
+def fisher(high: pd.Series, low: pd.Series, n: int = 9) -> tuple[pd.Series, pd.Series]:
+    """Ehlers Fisher Transform (as TradingView's built-in, length n) and its
+    trigger line (the Fisher value one candle earlier). Fisher crossing above
+    the trigger is the buy signal, crossing below is the sell signal."""
+    import math
+    hl2 = (high + low) / 2
+    hi, lo = hl2.rolling(n).max(), hl2.rolling(n).min()
+    val = fish = 0.0
+    out = []
+    for x, h, l in zip(hl2, hi, lo):
+        if pd.isna(h):
+            out.append(float("nan"))
+            continue
+        val = 0.66 * ((x - l) / (h - l) - 0.5 if h > l else 0.0) + 0.67 * val
+        val = max(min(val, 0.999), -0.999)
+        fish = 0.5 * math.log((1 + val) / (1 - val)) + 0.5 * fish
+        out.append(fish)
+    f = pd.Series(out, index=high.index)
+    return f, f.shift(1)
 
 
 def trades(b: pd.DataFrame) -> pd.DataFrame:
