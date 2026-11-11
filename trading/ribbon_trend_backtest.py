@@ -41,8 +41,9 @@ def load(recent: str | None) -> pd.DataFrame:
     return d
 
 
-def bars10(d: pd.DataFrame) -> pd.DataFrame:
-    b = d.set_index("ts").resample("10min", origin="start_day", offset="15min").agg(
+def bars10(d: pd.DataFrame, minutes: int = 10) -> pd.DataFrame:
+    """`minutes`-minute candles (10 by default) with the rule's indicators."""
+    b = d.set_index("ts").resample(f"{minutes}min", origin="start_day", offset="15min").agg(
         {"open": "first", "high": "max", "low": "min", "close": "last"}).dropna().reset_index()
     b["day"] = b.ts.dt.date
     b["hhmm"] = b.ts.dt.strftime("%H:%M")

@@ -18,6 +18,7 @@ Data: data_cache/NIFTY50_5minute_1y.csv (saved by ribbon_filter_test.py
 Usage on the VPS:  ~/venv/bin/python ribbon_exit_test.py
                    ~/venv/bin/python ribbon_exit_test.py --reentry   (re-entry rules, live exit)
                    ~/venv/bin/python ribbon_exit_test.py --entry     (MACD vs Fisher Transform entry)
+                   ~/venv/bin/python ribbon_exit_test.py --explore   (earlier entry / other exits / 5-min)
 """
 from __future__ import annotations
 
@@ -55,6 +56,8 @@ def momentum(entry: str, s: int, last, prev, recent: list) -> bool:
         return True
     if entry == "macd":
         return last.mh * s > 0 and (last.mh - prev.mh) * s > 0
+    if entry == "macd_pos":                     # histogram on the signal side, rising not required
+        return last.mh * s > 0
     if entry == "fisher_state":
         return (last.fish - last.fish_trig) * s > 0
     bars = [last] if entry == "fisher_cross" else recent
@@ -63,12 +66,17 @@ def momentum(entry: str, s: int, last, prev, recent: list) -> bool:
 
 def simulate(d: pd.DataFrame, exit_mode: str = "close", touch_buf: float = 0.0,
              trail: tuple[float, float] | None = None, be: float | None = None,
-             after_stop: str = "same", max_signals: int = MAX_SIGNALS, entry: str = "macd") -> pd.DataFrame:
+             after_stop: str = "same", max_signals: int = MAX_SIGNALS, entry: str = "macd",
+             tf: int = 10, stack: str = "9-21-50", ema9_buf: float | None = None, fisher_exit: bool = False,
+             target: float | None = None) -> pd.DataFrame:
     """after_stop: 'same' = no more signals that direction after a stop-loss (live),
     'all' = no more signals at all after a stop-loss, 'none' = no block,
-    'once' = one trade per direction per day, whatever its result."""
-    b = rb.bars10(d)
-    b["done"] = b.ts + pd.Timedelta(minutes=10)
+    'once' = one trade per direction per day, whatever its result.
+    tf: signal candle minutes (10 live, or 5). stack: "9-21-50" (live) or "9-21" (EMA50 not required).
+    Extra exits: ema9_buf -> price goes that far through EMA9; fisher_exit -> a signal candle on which
+    the Fisher Transform crosses against the trade; target -> take profit at entry +/- target pts."""
+    b = rb.bars10(d, tf)
+    b["done"] = b.ts + pd.Timedelta(minutes=tf)
     h1 = rb.day_features(d, None)["hour1_range"]
     wide = (h1 >= ft.FIRST_HOUR_MIN).astype(int)
     trending = wide.rolling(ft.TREND_DAYS).sum().shift(1) >= ft.TREND_NEEDED
@@ -91,11 +99,16 @@ def simulate(d: pd.DataFrame, exit_mode: str = "close", touch_buf: float = 0.0,
                 out.append(dict(day=day, side=pos["side"], why="ema21",
                                 pts=(last.close - pos["entry"]) * pos["side"] - COST))
                 pos = None
+            elif pos and fisher_exit and last.day == day and last.fish_x == -pos["side"]:
+                out.append(dict(day=day, side=pos["side"], why="fisher",
+                                pts=(last.close - pos["entry"]) * pos["side"] - COST))
+                pos = None
             elif not pos and prev is not None and last.day == day and known.get(day, False) \
                     and "09:35" <= last.hhmm < "14:30" and st["n"] < max_signals \
                     and (trending.get(day, False) or (last.hhmm >= "10:15" and h1.get(day, 0) >= ft.FIRST_HOUR_MIN)):
-                up = last.close > last.e9 > last.e21 > last.e50 and last.rsi > 60
-                dn = last.close < last.e9 < last.e21 < last.e50 and last.rsi < 40
+                full = stack == "9-21-50"
+                up = last.close > last.e9 > last.e21 and (not full or last.e21 > last.e50) and last.rsi > 60
+                dn = last.close < last.e9 < last.e21 and (not full or last.e21 < last.e50) and last.rsi < 40
                 lg, sh = up and momentum(entry, 1, last, prev, recent), dn and momentum(entry, -1, last, prev, recent)
                 side = 1 if lg else -1 if sh else 0
                 blocked = (after_stop == "same" and side in st["stopped"]) or (after_stop == "all" and st["stopped"]) \
@@ -118,6 +131,8 @@ def simulate(d: pd.DataFrame, exit_mode: str = "close", touch_buf: float = 0.0,
         levels = [(pos["stop"], "stop")]
         if exit_mode == "touch" and last is not None:
             levels.append((last.e21 - s * touch_buf, "touch"))
+        if ema9_buf is not None and last is not None:
+            levels.append((last.e9 - s * ema9_buf, "ema9"))
         if trail and (pos["best"] - pos["entry"]) * s >= trail[0]:
             levels.append((pos["best"] - s * trail[1], "trail"))
         lvl, why = max(levels, key=lambda x: x[0] * s)                    # nearest to price
@@ -128,6 +143,13 @@ def simulate(d: pd.DataFrame, exit_mode: str = "close", touch_buf: float = 0.0,
                 st["stopped"].add(s)
             pos = None
             continue
+        if target:
+            tgt = pos["entry"] + s * target
+            if (s > 0 and r.high >= tgt) or (s < 0 and r.low <= tgt):
+                px = max(r.open, tgt) if s > 0 else min(r.open, tgt)
+                out.append(dict(day=day, side=s, why="target", pts=(px - pos["entry"]) * s - COST))
+                pos = None
+                continue
         pos["best"] = max(pos["best"], r.high) if s > 0 else min(pos["best"], r.low)
         if be and (pos["best"] - pos["entry"]) * s >= be:
             pos["stop"] = max(pos["stop"], pos["entry"]) if s > 0 else min(pos["stop"], pos["entry"])
@@ -138,6 +160,8 @@ def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--csv")
     ap.add_argument("--yahoo", help="Yahoo chart JSON only (60 days, quick check)")
+    ap.add_argument("--explore", action="store_true",
+                    help="earlier entries, Fisher/EMA9/trail/target exits and 5-minute candles vs the live rule")
     ap.add_argument("--entry", action="store_true",
                     help="with the live exit, compare MACD vs Ehlers Fisher Transform as the entry momentum check")
     ap.add_argument("--reentry", action="store_true",
@@ -152,6 +176,22 @@ def main() -> None:
             y = ft.normalize(y)
             d = pd.concat([d, y[y.ts > d.ts.max()]], ignore_index=True)
     live = dict(exit_mode="touch", touch_buf=20)
+    if args.explore:
+        variants = [("LIVE: 10m, MACD, exit 20 thru EMA21", live)]
+        variants += [("exit: Fisher turns against", {"exit_mode": "none", "fisher_exit": True})]
+        variants += [("exit: Fisher OR 20 thru EMA21", {**live, "fisher_exit": True})]
+        variants += [(f"exit: {n} thru EMA9", {"exit_mode": "none", "ema9_buf": n}) for n in (0, 10, 20)]
+        variants += [(f"exit: EMA21 + trail {x}/{y}", {**live, "trail": (x, y)}) for x, y in ((80, 50), (100, 60), (150, 80))]
+        variants += [(f"exit: EMA21 + target {x}", {**live, "target": x}) for x in (100, 150)]
+        variants += [("entry: MACD hist >0 (no 'rising')", {**live, "entry": "macd_pos"})]
+        variants += [("entry: EMA9>21 only (no EMA50)", {**live, "stack": "9-21"})]
+        variants += [("entry: EMA9>21 + MACD hist >0", {**live, "stack": "9-21", "entry": "macd_pos"})]
+        variants += [("5m candles, live rules", {**live, "tf": 5})]
+        variants += [("5m, exit 10 thru EMA21", {**live, "tf": 5, "touch_buf": 10})]
+        variants += [("5m, exit Fisher OR EMA21", {**live, "tf": 5, "fisher_exit": True})]
+        variants += [("5m, MACD hist >0", {**live, "tf": 5, "entry": "macd_pos"})]
+        variants += [("5m, 10m-style exit 20 thru EMA9", {"exit_mode": "none", "tf": 5, "ema9_buf": 20})]
+        return report(d, variants)
     if args.entry:
         variants = [(f"{e}" + (" (LIVE NOW)" if e == "macd" else ""), {**live, "entry": e})
                     for e in ("macd", "fisher_cross", "fisher_cross3", "fisher_state", "none")]
