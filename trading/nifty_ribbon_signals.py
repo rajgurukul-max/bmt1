@@ -9,6 +9,8 @@ Rule (10-minute candles, same code as ribbon_trend_backtest.py):
         10-min candle; checked every poll, no waiting for the candle close), the
         stop is touched, or 15:10. 1-year test: +2,955 pts vs +2,559 for the old
         "candle closes through EMA21" exit, better in both halves of the year.
+  TRAIL once the trade is +150 pts, exit on an 80-pt pullback from its best
+        price (1-year test: +3,007 vs +2,862 pts, better in both halves).
   Entries 09:35-14:30, at most 2 signals a day. After a stop-loss, no more
   signals in that same direction for the rest of the day (1-year test: total
   +2,237 -> +2,457 pts, max drawdown 442 -> 380, better in both halves).
@@ -60,6 +62,7 @@ CONDOR_STATE = BASE_DIR / "nifty_condor_state.json"
 EXIT_TRIES = 3
 STOP_PTS = 60.0
 EMA_EXIT_BUFFER = 20.0        # exit when price is this far through EMA21
+TRAIL_START, TRAIL_GAP = 150.0, 80.0   # once +150 pts, exit on an 80-pt pullback from the best price
 RSI_BUY, RSI_SELL = 60.0, 40.0   # 1-year test: 55/45 made 167 pts less (2,290 vs 2,457)
 FIRST_HOUR_MIN = 120.0
 TREND_DAYS, TREND_NEEDED = 5, 4
@@ -276,6 +279,13 @@ class Engine:
                 self._exit(st, ltp, f"STOP HIT at {ltp:.0f} (stop {pos['stop']:.0f})")
                 st.setdefault("stopped", []).append(side)
                 return
+            best = pos.get("best", pos["entry"])
+            if (best - pos["entry"]) * side >= TRAIL_START:
+                lvl = best - side * TRAIL_GAP
+                if (side > 0 and ltp <= lvl) or (side < 0 and ltp >= lvl):
+                    self._exit(st, ltp, f"TRAILING STOP: best was {best:.0f} "
+                                        f"({(best - pos['entry']) * side:+.0f} pts), price came back to {ltp:.0f}")
+                    return
             if not b.empty:
                 e21 = float(b.iloc[-1].e21)
                 lvl = e21 - side * EMA_EXIT_BUFFER
@@ -283,6 +293,12 @@ class Engine:
                     self._exit(st, ltp, f"Price {ltp:.0f} went {EMA_EXIT_BUFFER:.0f} pts "
                                         f"{'below' if side > 0 else 'above'} EMA21 ({e21:.0f})")
                     return
+            pos["best"] = max(best, ltp) if side > 0 else min(best, ltp)
+            if not pos.get("trail_on") and (pos["best"] - pos["entry"]) * side >= TRAIL_START:
+                pos["trail_on"] = True
+                self.alerts.send("INFO", f"Trailing stop ON (+{TRAIL_START:.0f} pts reached)",
+                                 f"Exit if Nifty comes back {TRAIL_GAP:.0f} pts from its best "
+                                 f"(now {pos['best'] - side * TRAIL_GAP:.0f}, moves with the best price).")
         if pos and now.strftime("%H:%M") >= EXIT_HHMM:
             self._exit(st, ltp if ltp is not None else float(today_bars.close.iloc[-1]), "15:10 time exit")
             return
@@ -324,7 +340,8 @@ class Engine:
                          f"RSI {last.rsi:.0f}, MACD hist {last.mh:+.1f}\n"
                          f"STOP {stop:.0f} ({STOP_PTS:.0f} pts). Exit if price goes {EMA_EXIT_BUFFER:.0f} pts "
                          f"{'below' if side > 0 else 'above'} EMA21 (now {last.e21:.0f} -> exit at "
-                         f"{last.e21 - side * EMA_EXIT_BUFFER:.0f}, moves with EMA21), or at 15:10.\n"
+                         f"{last.e21 - side * EMA_EXIT_BUFFER:.0f}, moves with EMA21), or at 15:10. "
+                         f"Once +{TRAIL_START:.0f} pts: trailing stop {TRAIL_GAP:.0f} pts from the best.\n"
                          f"Futures: {'buy' if side > 0 else 'sell'} Nifty fut | Options: buy ATM "
                          f"{'CE' if side > 0 else 'PE'}.")
         if self.trader:

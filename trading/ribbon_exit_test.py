@@ -177,11 +177,12 @@ def main() -> None:
             d = pd.concat([d, y[y.ts > d.ts.max()]], ignore_index=True)
     live = dict(exit_mode="touch", touch_buf=20)
     if args.explore:
-        variants = [("LIVE: 10m, MACD, exit 20 thru EMA21", live)]
+        variants = [("old: 10m, MACD, exit 20 thru EMA21", live)]
         variants += [("exit: Fisher turns against", {"exit_mode": "none", "fisher_exit": True})]
         variants += [("exit: Fisher OR 20 thru EMA21", {**live, "fisher_exit": True})]
         variants += [(f"exit: {n} thru EMA9", {"exit_mode": "none", "ema9_buf": n}) for n in (0, 10, 20)]
-        variants += [(f"exit: EMA21 + trail {x}/{y}", {**live, "trail": (x, y)}) for x, y in ((80, 50), (100, 60), (150, 80))]
+        variants += [(f"exit: EMA21 + trail {x}/{y}" + (" (LIVE NOW)" if (x, y) == (150, 80) else ""), {**live, "trail": (x, y)})
+                     for x, y in ((80, 50), (100, 60), (150, 80))]
         variants += [(f"exit: EMA21 + target {x}", {**live, "target": x}) for x in (100, 150)]
         variants += [("entry: MACD hist >0 (no 'rising')", {**live, "entry": "macd_pos"})]
         variants += [("entry: EMA9>21 only (no EMA50)", {**live, "stack": "9-21"})]
