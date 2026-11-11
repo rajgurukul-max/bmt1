@@ -70,7 +70,7 @@ def simulate(d: pd.DataFrame, exit_mode: str = "close", touch_buf: float = 0.0,
              after_stop: str = "same", max_signals: int = MAX_SIGNALS, entry: str = "macd",
              tf: int = 10, stack: str = "9-21-50", ema9_buf: float | None = None, fisher_exit: bool = False,
              target: float | None = None, hold: bool = False, stop_pts: float = STOP,
-             ema50_buf: float | None = None) -> pd.DataFrame:
+             ema50_buf: float | None = None, carry_min: float | None = None) -> pd.DataFrame:
     """after_stop: 'same' = no more signals that direction after a stop-loss (live),
     'all' = no more signals at all after a stop-loss, 'none' = no block,
     'once' = one trade per direction per day, whatever its result.
@@ -79,7 +79,8 @@ def simulate(d: pd.DataFrame, exit_mode: str = "close", touch_buf: float = 0.0,
     the Fisher Transform crosses against the trade; target -> take profit at entry +/- target pts.
     hold: carry the trade overnight -- no 15:10 exit; it ends only on the stop / EMA / trailing exits
     (a gap through an exit level fills at the open). stop_pts: stop distance. ema50_buf: price goes
-    that far through EMA50."""
+    that far through EMA50. carry_min (with hold): at 15:10 the trade is carried overnight only if
+    it is at least this many points in profit, otherwise it is closed like an intraday trade."""
     b = rb.bars10(d, tf)
     b["done"] = b.ts + pd.Timedelta(minutes=tf)
     h1 = rb.day_features(d, None)["hour1_range"]
@@ -128,8 +129,10 @@ def simulate(d: pd.DataFrame, exit_mode: str = "close", touch_buf: float = 0.0,
             continue
         s = pos["side"]
         # 2) 15:10 exit at the price then
-        if not hold and r.ts.strftime("%H:%M") >= "15:10":
-            out.append(dict(day=day, side=s, why="15:10", pts=(r.open - pos["entry"]) * s - COST))
+        if r.ts.strftime("%H:%M") >= "15:10" and (
+                not hold or (carry_min is not None and (r.open - pos["entry"]) * s < carry_min)):
+            out.append(dict(day=day, side=s, why="15:10", pts=(r.open - pos["entry"]) * s - COST,
+                            nights=(day - pos["day"]).days))
             pos = None
             continue
         # 3) price levels known before this 5-min candle; the first one hit exits
@@ -198,6 +201,9 @@ def main() -> None:
         variants += [("HOLD, exit 40 thru EMA21 + trail 300/150", {**h, "touch_buf": 40, "trail": (300, 150)})]
         variants += [("HOLD, exit 20 thru EMA50", {"exit_mode": "none", "hold": True, "ema50_buf": 20})]
         variants += [("HOLD, EMA50 exit + trail 300/150", {"exit_mode": "none", "hold": True, "ema50_buf": 20, "trail": (300, 150)})]
+        for x, y in ((150, 80), (200, 100), (300, 150)):
+            variants += [(f"CARRY only if +{c} at 15:10, trail {x}/{y}", {**h, "trail": (x, y), "carry_min": c})
+                         for c in (0, 50, 100)]
         return report(d, variants, swing=True)
     if args.explore:
         variants = [("old: 10m, MACD, exit 20 thru EMA21", live)]
