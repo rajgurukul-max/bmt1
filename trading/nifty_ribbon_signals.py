@@ -28,6 +28,13 @@ the nearest weekly after today (never an expiry-day option); if that strike is
 a leg of the open Nifty condor, one strike ITM is used instead so the two never
 share a symbol. A file RIBBON_KILL_SWITCH stops new trades (exits still run).
 
+A separate CARRY setup can run alongside (--carry-lots N, paper unless
+--carry-live): the same entries, but a trade that is in profit at 15:10 is kept
+overnight (NRML, options with >= 5 days to expiry) and ends on the stop / EMA21
+exit / a 200-100 trailing stop; a gap through an exit level exits at the open.
+1-year test in Nifty points: +4,899 vs +3,007 intraday, max drawdown 457 vs 309,
+worst trade -100. Its state and trades are in logs/ribbon_carry_*.
+
 Alerts go to the terminal/log and, if a topic is set, to your phone through the
 free ntfy app (https://ntfy.sh): install ntfy, subscribe to a hard-to-guess
 topic name, and pass it with --ntfy TOPIC (or NTFY_TOPIC=... in .env).
@@ -63,6 +70,13 @@ EXIT_TRIES = 3
 STOP_PTS = 60.0
 EMA_EXIT_BUFFER = 20.0        # exit when price is this far through EMA21
 TRAIL_START, TRAIL_GAP = 150.0, 80.0   # once +150 pts, exit on an 80-pt pullback from the best price
+# The separate CARRY setup (--carry-lots N): same entries, but a trade that is in profit at 15:10
+# is kept overnight; it ends on the stop / EMA21 / a wider trailing stop (a gap exits at the open).
+CARRY_TRAIL = (200.0, 100.0)
+CARRY_MIN_PTS = 0.0                    # carried overnight only if at least this many pts in profit at 15:10
+CARRY_MIN_EXPIRY_DAYS = 5              # carry options need >= 5 calendar days to expiry when bought
+CARRY_STATE_FILE = BASE_DIR / "logs" / "ribbon_carry_state.json"
+CARRY_TRADES_CSV = BASE_DIR / "logs" / "ribbon_carry_trades.csv"
 RSI_BUY, RSI_SELL = 60.0, 40.0   # 1-year test: 55/45 made 167 pts less (2,290 vs 2,457)
 FIRST_HOUR_MIN = 120.0
 TREND_DAYS, TREND_NEEDED = 5, 4
@@ -96,12 +110,27 @@ class Alerts:
             logger.warning("Phone alert failed (%s) -- the terminal/log alert above still stands.", exc)
 
 
+class Prefixed:
+    """Alerts with a prefix on every title, so the carry setup's messages stand apart."""
+
+    def __init__(self, alerts, prefix: str):
+        self.alerts, self.prefix = alerts, prefix
+
+    def send(self, kind: str, title: str, body: str) -> None:
+        self.alerts.send(kind, self.prefix + title, body)
+
+
 class OptionTrader:
     """Buys the ATM CE (long signal) / PE (short signal) and sells it on exit.
-    live=False paper-trades at real option prices (place_and_wait dry run)."""
+    live=False paper-trades at real option prices (place_and_wait dry run).
+    The carry setup uses product NRML (can be held overnight), options with at
+    least `min_expiry_days` to expiry, and its own trades file."""
 
-    def __init__(self, kite, alerts: Alerts, lots: int, live: bool):
+    def __init__(self, kite, alerts, lots: int, live: bool, product: str | None = None,
+                 min_expiry_days: int = 1, trades_csv=None, carry: bool = False):
         self.kite, self.alerts, self.lots, self.live = kite, alerts, lots, live
+        self.product = product or kite.PRODUCT_MIS
+        self.min_expiry_days, self.trades_csv, self.carry = min_expiry_days, trades_csv or TRADES_CSV, carry
         self.tag = "LIVE" if live else "PAPER"
         self._chain: list[dict] | None = None
         self._chain_day = None
@@ -110,7 +139,7 @@ class OptionTrader:
         if self._chain is None or self._chain_day != today:
             opts = [i for i in self.kite.instruments(core.EXCHANGE)
                     if i["name"] == "NIFTY" and i["segment"] == "NFO-OPT"]
-            expiry = min(i["expiry"] for i in opts if i["expiry"] > today)
+            expiry = min(i["expiry"] for i in opts if (i["expiry"] - today).days >= self.min_expiry_days)
             self._chain, self._chain_day = [i for i in opts if i["expiry"] == expiry], today
         return self._chain
 
@@ -148,7 +177,7 @@ class OptionTrader:
                                      f"{sym} x{qty} needs ~Rs {need:,.0f}, available Rs {free:,.0f}.")
                     return None
             try:
-                _, px = core.place_and_wait(self.kite, sym, True, qty, not self.live, self.kite.PRODUCT_MIS)
+                _, px = core.place_and_wait(self.kite, sym, True, qty, not self.live, self.product)
                 filled = qty
             except core.OrderNotFilled as exc:
                 filled, px = exc.filled_qty, exc.avg_price
@@ -163,17 +192,19 @@ class OptionTrader:
                              f"Kite, sell it yourself; this script is not tracking it.")
             return None
         t = {"symbol": sym, "qty": filled, "left": filled, "entry": px, "exit_value": 0.0,
-             "side": side, "time": now.strftime("%H:%M"), "live": self.live, "warned": False}
+             "side": side, "time": now.strftime("%H:%M"), "live": self.live, "warned": False,
+             "day": now.date().isoformat(), "expiry": inst["expiry"].isoformat()}
         self.alerts.send("ORDER", f"{self.tag}: bought {filled} {sym} @ {px:.2f}",
-                         f"Cost Rs {px * filled:,.0f}. It is sold automatically on the EXIT signal "
-                         f"(stop / EMA21 / 15:10).")
+                         f"Cost Rs {px * filled:,.0f}. It is sold automatically on the EXIT signal " +
+                         ("(stop / EMA21 / trailing stop); kept overnight only if in profit at 15:10."
+                          if self.carry else "(stop / EMA21 / 15:10)."))
         return t
 
     def held(self, symbol: str) -> int | None:
-        """MIS quantity of `symbol` in the account now, None if Kite can't say."""
+        """This setup's quantity of `symbol` in the account now, None if Kite can't say."""
         try:
             return sum(int(p["quantity"]) for p in self.kite.positions()["net"]
-                       if p["tradingsymbol"] == symbol and p.get("product") == "MIS")
+                       if p["tradingsymbol"] == symbol and p.get("product") == self.product)
         except Exception as exc:
             logger.warning("Could not read positions (%s) -- selling the recorded quantity.", exc)
             return None
@@ -195,7 +226,7 @@ class OptionTrader:
                 break
             try:
                 _, px = core.place_and_wait(self.kite, t["symbol"], False, t["left"], not t["live"],
-                                            self.kite.PRODUCT_MIS)
+                                            self.product)
                 t["exit_value"] += px * t["left"]
                 t["left"] = 0
             except core.OrderNotFilled as exc:
@@ -208,18 +239,20 @@ class OptionTrader:
             if not t["warned"]:
                 t["warned"] = True
                 self.alerts.send("ERROR", f"EXIT NOT DONE: {t['left']} {t['symbol']} still open",
-                                 "Retrying every poll. If it stays open, SELL IT IN KITE NOW. (MIS is squared "
-                                 "off by Zerodha around 15:20 as a last resort.)")
+                                 "Retrying every poll. If it stays open, SELL IT IN KITE NOW." +
+                                 ("" if self.carry else " (MIS is squared off by Zerodha around 15:20 "
+                                                        "as a last resort.)"))
             return False
         sold = t["qty"]
         exit_px = t["exit_value"] / sold
         pnl = t["exit_value"] - t["entry"] * sold
         self.alerts.send("ORDER", f"{'LIVE' if t['live'] else 'PAPER'}: sold {sold} {t['symbol']} @ {exit_px:.2f}"
-                         f"  P&L Rs {pnl:+,.0f}", f"{why}. Bought @ {t['entry']:.2f} at {t['time']}.")
+                         f"  P&L Rs {pnl:+,.0f}", f"{why}. Bought @ {t['entry']:.2f} at {t['time']}"
+                         f"{' on ' + t['day'] if self.carry and t.get('day') else ''}.")
         core.append_csv({"date": core.now_ist().strftime("%Y-%m-%d"), "mode": "LIVE" if t["live"] else "PAPER",
-                         "symbol": t["symbol"], "qty": sold, "entry_time": t["time"],
+                         "symbol": t["symbol"], "qty": sold, "entry_day": t.get("day", ""), "entry_time": t["time"],
                          "exit_time": core.now_ist().strftime("%H:%M"), "entry": round(t["entry"], 2),
-                         "exit": round(exit_px, 2), "pnl_rs": round(pnl), "why": why}, TRADES_CSV)
+                         "exit": round(exit_px, 2), "pnl_rs": round(pnl), "why": why}, self.trades_csv)
         return True
 
 
@@ -227,17 +260,28 @@ class Engine:
     """Feed it 5-minute candles + the latest price; it emits alerts. Pure logic,
     so it can be tested without Kite."""
 
-    def __init__(self, alerts: Alerts, state: dict | None = None, trader: OptionTrader | None = None):
+    def __init__(self, alerts, state: dict | None = None, trader: OptionTrader | None = None,
+                 carry: bool = False, trail: tuple[float, float] = (TRAIL_START, TRAIL_GAP), quiet: bool = False):
         self.alerts = alerts
         self.s = state or {}
         self.trader = trader
+        self.carry = carry                      # keep a trade overnight when it is in profit at 15:10
+        self.trail_start, self.trail_gap = trail
+        self.quiet = quiet                      # no market-type / skipped-signal INFO alerts (the main setup sends them)
 
     def _today(self, day: str) -> dict:
         if self.s.get("day") != day:
+            old = self.s
             self.s = {"day": day, "signals": 0, "pos": None, "last_bar": None, "announced": False,
                       "hour1_announced": False,
-                      "stopped": [], "block_announced": [], "trade": None}
+                      "stopped": [], "block_announced": [], "trade": None, "carry_note": False}
+            if self.carry:                      # the position and its option survive the night
+                self.s["pos"], self.s["trade"] = old.get("pos"), old.get("trade")
         return self.s
+
+    def _info(self, title: str, body: str) -> None:
+        if not self.quiet:
+            self.alerts.send("INFO", title, body)
 
     def step(self, now: datetime, five_min: pd.DataFrame, ltp: float | None) -> None:
         day = now.date()
@@ -259,14 +303,14 @@ class Engine:
             else:
                 msg = (f"Market type: QUIET ({int(prev.sum())}/{TREND_DAYS} recent days had a wide first hour). "
                        f"Signals only after 10:15 and only if today's first hour >= {FIRST_HOUR_MIN:.0f} pts.")
-            self.alerts.send("INFO", f"Nifty ribbon signals {day}", msg)
+            self._info(f"Nifty ribbon signals {day}", msg)
         h1 = f["hour1_range"].get(day) if day in f.index else None
         if not trending and not st["hour1_announced"] and now.strftime("%H:%M") >= "10:15" and h1 is not None:
             st["hour1_announced"] = True
             ok = h1 >= FIRST_HOUR_MIN
-            self.alerts.send("INFO", f"First hour range {h1:.0f} pts",
-                             "Today qualifies -- signals are ON for the rest of the day." if ok else
-                             "Below 120 pts -- no signals today (quiet day).")
+            self._info(f"First hour range {h1:.0f} pts",
+                       "Today qualifies -- signals are ON for the rest of the day." if ok else
+                       "Below 120 pts -- no signals today (quiet day).")
 
         pos = st["pos"]
         if self.trader and st.get("trade") and not pos:      # an earlier exit did not complete
@@ -280,8 +324,8 @@ class Engine:
                 st.setdefault("stopped", []).append(side)
                 return
             best = pos.get("best", pos["entry"])
-            if (best - pos["entry"]) * side >= TRAIL_START:
-                lvl = best - side * TRAIL_GAP
+            if (best - pos["entry"]) * side >= self.trail_start:
+                lvl = best - side * self.trail_gap
                 if (side > 0 and ltp <= lvl) or (side < 0 and ltp >= lvl):
                     self._exit(st, ltp, f"TRAILING STOP: best was {best:.0f} "
                                         f"({(best - pos['entry']) * side:+.0f} pts), price came back to {ltp:.0f}")
@@ -294,14 +338,27 @@ class Engine:
                                         f"{'below' if side > 0 else 'above'} EMA21 ({e21:.0f})")
                     return
             pos["best"] = max(best, ltp) if side > 0 else min(best, ltp)
-            if not pos.get("trail_on") and (pos["best"] - pos["entry"]) * side >= TRAIL_START:
+            if not pos.get("trail_on") and (pos["best"] - pos["entry"]) * side >= self.trail_start:
                 pos["trail_on"] = True
-                self.alerts.send("INFO", f"Trailing stop ON (+{TRAIL_START:.0f} pts reached)",
-                                 f"Exit if Nifty comes back {TRAIL_GAP:.0f} pts from its best "
-                                 f"(now {pos['best'] - side * TRAIL_GAP:.0f}, moves with the best price).")
+                self.alerts.send("INFO", f"Trailing stop ON (+{self.trail_start:.0f} pts reached)",
+                                 f"Exit if Nifty comes back {self.trail_gap:.0f} pts from its best "
+                                 f"(now {pos['best'] - side * self.trail_gap:.0f}, moves with the best price).")
         if pos and now.strftime("%H:%M") >= EXIT_HHMM:
-            self._exit(st, ltp if ltp is not None else float(today_bars.close.iloc[-1]), "15:10 time exit")
-            return
+            px = ltp if ltp is not None else float(b.close.iloc[-1]) if not b.empty else pos["entry"]
+            if not self.carry:
+                self._exit(st, px, "15:10 time exit")
+                return
+            pts = (px - pos["entry"]) * pos["side"]
+            expiring = (st.get("trade") or {}).get("expiry") == day.isoformat()
+            if pts < CARRY_MIN_PTS or expiring:
+                self._exit(st, px, "Its option expires today -- closed at 15:10" if expiring else
+                                   f"Not in profit at 15:10 ({pts:+.0f} pts) -- not carried overnight")
+                return
+            if not st.get("carry_note"):
+                st["carry_note"] = True
+                self.alerts.send("INFO", f"CARRYING overnight ({pts:+.0f} pts at 15:10)",
+                                 f"Entry {pos['entry']:.0f}. Still protected by the stop {pos['stop']:.0f}, the EMA21 "
+                                 f"exit and the trailing stop; a gap through them exits at tomorrow's open.")
 
         if today_bars.empty or len(b) < 2:
             return
@@ -326,13 +383,14 @@ class Engine:
             if side not in st.setdefault("block_announced", []):
                 st["block_announced"].append(side)
                 what = "BUY" if side > 0 else "SELL"
-                self.alerts.send("INFO", f"{what} signal skipped at {last.close:.0f}",
-                                 f"A {what} already hit its stop today -- no more {what}s today "
-                                 f"(the opposite side is still allowed).")
+                self._info(f"{what} signal skipped at {last.close:.0f}",
+                           f"A {what} already hit its stop today -- no more {what}s today "
+                           f"(the opposite side is still allowed).")
             return
         px = float(last.close)
         stop = px - side * STOP_PTS
-        st["pos"] = {"side": side, "entry": px, "stop": stop, "time": now.strftime("%H:%M")}
+        st["pos"] = {"side": side, "entry": px, "stop": stop, "time": now.strftime("%H:%M"),
+                     "day": day.isoformat()}
         st["signals"] += 1
         what = "BUY" if side > 0 else "SELL"
         self.alerts.send(what, f"Nifty {what} at {px:.0f}  (signal {st['signals']}/{MAX_SIGNALS} today)",
@@ -340,8 +398,9 @@ class Engine:
                          f"RSI {last.rsi:.0f}, MACD hist {last.mh:+.1f}\n"
                          f"STOP {stop:.0f} ({STOP_PTS:.0f} pts). Exit if price goes {EMA_EXIT_BUFFER:.0f} pts "
                          f"{'below' if side > 0 else 'above'} EMA21 (now {last.e21:.0f} -> exit at "
-                         f"{last.e21 - side * EMA_EXIT_BUFFER:.0f}, moves with EMA21), or at 15:10. "
-                         f"Once +{TRAIL_START:.0f} pts: trailing stop {TRAIL_GAP:.0f} pts from the best.\n"
+                         f"{last.e21 - side * EMA_EXIT_BUFFER:.0f}, moves with EMA21)"
+                         f"{'; kept overnight only if in profit at 15:10' if self.carry else ', or at 15:10'}. "
+                         f"Once +{self.trail_start:.0f} pts: trailing stop {self.trail_gap:.0f} pts from the best.\n"
                          f"Futures: {'buy' if side > 0 else 'sell'} Nifty fut | Options: buy ATM "
                          f"{'CE' if side > 0 else 'PE'}.")
         if self.trader:
@@ -351,7 +410,8 @@ class Engine:
         pos = st["pos"]
         pts = (px - pos["entry"]) * pos["side"]
         self.alerts.send("EXIT", f"Exit {'long' if pos['side'] > 0 else 'short'} at {px:.0f}  ({pts:+.0f} pts)",
-                         f"{why}. Entry {pos['entry']:.0f} at {pos['time']}.")
+                         f"{why}. Entry {pos['entry']:.0f} at {pos['time']}"
+                         f"{' on ' + pos['day'] if self.carry and pos.get('day') and pos['day'] != st['day'] else ''}.")
         st["pos"] = None
         if self.trader and st.get("trade"):
             if self.trader.exit(st["trade"], why):
@@ -374,6 +434,10 @@ def main() -> None:
     ap.add_argument("--test-alert", action="store_true", help="send one test alert and exit")
     ap.add_argument("--live", action="store_true", help="place REAL orders (default: paper trades)")
     ap.add_argument("--lots", type=int, default=5, help="option lots per signal (default 5)")
+    ap.add_argument("--carry-lots", type=int, default=0,
+                    help="also run the separate CARRY setup with this many lots (0 = off): a trade in profit "
+                         "at 15:10 is kept overnight. Paper unless --carry-live")
+    ap.add_argument("--carry-live", action="store_true", help="place REAL orders for the carry setup")
     args = ap.parse_args()
     (BASE_DIR / "logs").mkdir(exist_ok=True)
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s",
@@ -400,6 +464,18 @@ def main() -> None:
     eng = Engine(alerts, state, trader)
     mode = (f"LIVE ORDERS: {args.lots} lots ATM CE/PE per signal" if args.live
             else f"PAPER trades ({args.lots} lots), no orders")
+    ceng = None
+    if args.carry_lots > 0:
+        calerts = Prefixed(alerts, "CARRY ")
+        cstate = json.loads(CARRY_STATE_FILE.read_text()) if CARRY_STATE_FILE.exists() else None
+        ctrader = OptionTrader(kite, calerts, args.carry_lots, args.carry_live, product=kite.PRODUCT_NRML,
+                               min_expiry_days=CARRY_MIN_EXPIRY_DAYS, trades_csv=CARRY_TRADES_CSV, carry=True)
+        ceng = Engine(calerts, cstate, ctrader, carry=True, trail=CARRY_TRAIL, quiet=True)
+        mode += (f". CARRY setup: {args.carry_lots} lots, {'LIVE ORDERS' if args.carry_live else 'PAPER'}, "
+                 f"kept overnight if in profit at 15:10")
+        held = (cstate or {}).get("pos")
+        if held:
+            mode += f" (carrying a {'long' if held['side'] > 0 else 'short'} from {held.get('day', '?')})"
     alerts.send("INFO", f"Ribbon {'LIVE' if args.live else 'paper'} trading started",
                 f"{mode}. Max 2 signals a day, exits on stop / EMA21 / 15:10.")
     logger.info("Watching Nifty for ribbon signals until 15:30 (%s).", mode)
@@ -415,6 +491,13 @@ def main() -> None:
             STATE_FILE.write_text(json.dumps(eng.s))
         except Exception as exc:
             logger.warning("Poll failed (%s) -- retrying.", exc)
+            five = None
+        if ceng and five is not None:           # its own try: a carry problem must never stop the main setup
+            try:
+                ceng.step(now, five, ltp)
+                CARRY_STATE_FILE.write_text(json.dumps(ceng.s))
+            except Exception as exc:
+                logger.warning("Carry setup poll failed (%s) -- retrying.", exc)
         time_module.sleep(POLL_S)
     logger.info("Market closed -- done for today.")
 
