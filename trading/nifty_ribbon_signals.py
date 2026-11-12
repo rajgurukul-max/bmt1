@@ -319,7 +319,10 @@ class Engine:
         # stop check on every poll, using the live price
         if pos and ltp is not None:
             side = pos["side"]
-            if (side > 0 and ltp <= pos["stop"]) or (side < 0 and ltp >= pos["stop"]):
+            # If the EMA21 exit level sits inside the stop and a gap jumps both, it is an EMA exit, not a
+            # stop-loss (as backtested) -- so it does not block that direction for the rest of the day.
+            ema_first = not b.empty and (float(b.iloc[-1].e21) - side * EMA_EXIT_BUFFER - pos["stop"]) * side > 0
+            if not ema_first and ((side > 0 and ltp <= pos["stop"]) or (side < 0 and ltp >= pos["stop"])):
                 self._exit(st, ltp, f"STOP HIT at {ltp:.0f} (stop {pos['stop']:.0f})")
                 st.setdefault("stopped", []).append(side)
                 return
@@ -350,9 +353,12 @@ class Engine:
                 return
             pts = (px - pos["entry"]) * pos["side"]
             expiring = (st.get("trade") or {}).get("expiry") == day.isoformat()
-            if pts < CARRY_MIN_PTS or expiring:
-                self._exit(st, px, "Its option expires today -- closed at 15:10" if expiring else
-                                   f"Not in profit at 15:10 ({pts:+.0f} pts) -- not carried overnight")
+            # decided at 15:10, 15:15, 15:20 and 15:25 (as backtested), not on every poll in between
+            slot = f"{now.hour:02d}:{now.minute - now.minute % 5:02d}"
+            check, st["carry_slot"] = st.get("carry_slot") != slot, slot
+            if check and (pts < CARRY_MIN_PTS or expiring):
+                self._exit(st, px, f"Its option expires today -- closed at {slot}" if expiring else
+                                   f"Not in profit at {slot} ({pts:+.0f} pts) -- not carried overnight")
                 return
             if not st.get("carry_note"):
                 st["carry_note"] = True
