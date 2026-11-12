@@ -76,7 +76,8 @@ def simulate(d: pd.DataFrame, exit_mode: str = "close", touch_buf: float = 0.0,
              after_stop: str = "same", max_signals: int = MAX_SIGNALS, entry: str = "macd",
              tf: int = 10, stack: str = "9-21-50", ema9_buf: float | None = None, fisher_exit: bool = False,
              target: float | None = None, hold: bool = False, stop_pts: float = STOP,
-             ema50_buf: float | None = None, carry_min: float | None = None) -> pd.DataFrame:
+             ema50_buf: float | None = None, carry_min: float | None = None,
+             max_ext: float | None = None) -> pd.DataFrame:
     """after_stop: 'same' = no more signals that direction after a stop-loss (live),
     'all' = no more signals at all after a stop-loss, 'none' = no block,
     'once' = one trade per direction per day, whatever its result.
@@ -86,7 +87,9 @@ def simulate(d: pd.DataFrame, exit_mode: str = "close", touch_buf: float = 0.0,
     hold: carry the trade overnight -- no 15:10 exit; it ends only on the stop / EMA / trailing exits
     (a gap through an exit level fills at the open). stop_pts: stop distance. ema50_buf: price goes
     that far through EMA50. carry_min (with hold): at 15:10 the trade is carried overnight only if
-    it is at least this many points in profit, otherwise it is closed like an intraday trade."""
+    it is at least this many points in profit, otherwise it is closed like an intraday trade.
+    max_ext: skip a signal whose close is more than this many points away from EMA21 (price already
+    stretched -- an ordinary pullback to the average would hit the 60-pt stop first)."""
     b = rb.bars10(d, tf)
     b["done"] = b.ts + pd.Timedelta(minutes=tf)
     h1 = rb.day_features(d, None)["hour1_range"]
@@ -123,6 +126,8 @@ def simulate(d: pd.DataFrame, exit_mode: str = "close", touch_buf: float = 0.0,
                 dn = last.close < last.e9 < last.e21 and (not full or last.e21 < last.e50) and last.rsi < 40
                 lg, sh = up and momentum(entry, 1, last, prev, recent), dn and momentum(entry, -1, last, prev, recent)
                 side = 1 if lg else -1 if sh else 0
+                if side and max_ext is not None and abs(last.close - last.e21) > max_ext:
+                    side = 0
                 blocked = (after_stop == "same" and side in st["stopped"]) or (after_stop == "all" and st["stopped"]) \
                     or (after_stop == "once" and side in st["traded"])
                 if side and not blocked:
@@ -184,6 +189,8 @@ def main() -> None:
                     help="(re)download the index's year of 5-min candles from Kite first (needs today's login)")
     ap.add_argument("--swing", action="store_true",
                     help="carry trades overnight (no 15:10 exit) with the live exits and wider variants")
+    ap.add_argument("--ext", action="store_true",
+                    help="skip signals where price is already stretched far from EMA21")
     ap.add_argument("--explore", action="store_true",
                     help="earlier entries, Fisher/EMA9/trail/target exits and 5-minute candles vs the live rule")
     ap.add_argument("--entry", action="store_true",
@@ -226,6 +233,14 @@ def main() -> None:
             variants += [(f"CARRY only if +{c} at 15:10, trail {x}/{y}", {**h, "trail": (x, y), "carry_min": c})
                          for c in (0, 50, 100)]
         return report(d, variants, swing=True)
+    if args.ext:
+        lt = {**live, "trail": (150, 80)}
+        variants = [("LIVE intraday (no limit)", lt)]
+        variants += [(f"skip if > {x} pts from EMA21", {**lt, "max_ext": x}) for x in (120, 100, 90, 80, 70, 60, 50)]
+        cy = {**live, "hold": True, "carry_min": 0, "trail": (200, 100)}
+        variants += [("CARRY setup (no limit)", cy)]
+        variants += [(f"CARRY, skip if > {x} pts from EMA21", {**cy, "max_ext": x}) for x in (120, 100, 80, 60)]
+        return report(d, variants)
     if args.explore:
         variants = [("old: 10m, MACD, exit 20 thru EMA21", live)]
         variants += [("exit: Fisher turns against", {"exit_mode": "none", "fisher_exit": True})]
