@@ -77,7 +77,8 @@ def simulate(d: pd.DataFrame, exit_mode: str = "close", touch_buf: float = 0.0,
              tf: int = 10, stack: str = "9-21-50", ema9_buf: float | None = None, fisher_exit: bool = False,
              target: float | None = None, hold: bool = False, stop_pts: float = STOP,
              ema50_buf: float | None = None, carry_min: float | None = None,
-             max_ext: float | None = None) -> pd.DataFrame:
+             max_ext: float | None = None, pullback: float | str | None = None, pb_bars: int = 3,
+             rsi_cap: float | None = None, max_day_move: float | None = None) -> pd.DataFrame:
     """after_stop: 'same' = no more signals that direction after a stop-loss (live),
     'all' = no more signals at all after a stop-loss, 'none' = no block,
     'once' = one trade per direction per day, whatever its result.
@@ -89,7 +90,15 @@ def simulate(d: pd.DataFrame, exit_mode: str = "close", touch_buf: float = 0.0,
     that far through EMA50. carry_min (with hold): at 15:10 the trade is carried overnight only if
     it is at least this many points in profit, otherwise it is closed like an intraday trade.
     max_ext: skip a signal whose close is more than this many points away from EMA21 (price already
-    stretched -- an ordinary pullback to the average would hit the 60-pt stop first)."""
+    stretched -- an ordinary pullback to the average would hit the 60-pt stop first).
+    Ways not to buy the top of a move that has already run:
+    pullback: don't enter at the signal price -- place a limit `pullback` points better (or at EMA9
+    with "ema9") and take the trade only if price comes back to it within pb_bars signal candles.
+    rsi_cap: skip a BUY with RSI above it (a SELL with RSI below 100 - it).
+    max_day_move: skip when price has already moved more than this from yesterday's close in the
+    signal's direction."""
+    pclose = d.groupby(d.ts.dt.date).close.last().shift(1)
+    pending = None
     b = rb.bars10(d, tf)
     b["done"] = b.ts + pd.Timedelta(minutes=tf)
     h1 = rb.day_features(d, None)["hour1_range"]
@@ -128,14 +137,32 @@ def simulate(d: pd.DataFrame, exit_mode: str = "close", touch_buf: float = 0.0,
                 side = 1 if lg else -1 if sh else 0
                 if side and max_ext is not None and abs(last.close - last.e21) > max_ext:
                     side = 0
+                if side and rsi_cap is not None and (last.rsi > rsi_cap if side > 0 else last.rsi < 100 - rsi_cap):
+                    side = 0
+                if side and max_day_move is not None and (last.close - pclose.get(day, last.close)) * side > max_day_move:
+                    side = 0
                 blocked = (after_stop == "same" and side in st["stopped"]) or (after_stop == "all" and st["stopped"]) \
                     or (after_stop == "once" and side in st["traded"])
-                if side and not blocked:
+                if side and not blocked and pullback is not None:
+                    if pending is None:              # a resting limit order instead of buying the signal price
+                        limit = last.e9 if pullback == "ema9" else last.close - side * pullback
+                        pending = dict(side=side, limit=limit, day=day, until=t + pd.Timedelta(minutes=tf * pb_bars))
+                elif side and not blocked:
                     pos = dict(side=side, entry=last.close, best=last.close, day=day,
                                stop=last.close - side * stop_pts)
                     st["n"] += 1
                     st["traded"].add(side)
         prev_close = r.close
+        if pending and (pos or pending["day"] != day or t >= pending["until"]):
+            pending = None
+        if pending and ((pending["side"] > 0 and r.low <= pending["limit"]) or
+                        (pending["side"] < 0 and r.high >= pending["limit"])):
+            s, px = pending["side"], pending["limit"]
+            px = min(r.open, px) if s > 0 else max(r.open, px)          # opened beyond the limit: a better fill
+            pos = dict(side=s, entry=px, best=px, day=day, stop=px - s * stop_pts)
+            st["n"] += 1
+            st["traded"].add(s)
+            pending = None
         if not pos or (pos["day"] != day and not hold):
             continue
         s = pos["side"]
@@ -189,6 +216,8 @@ def main() -> None:
                     help="(re)download the index's year of 5-min candles from Kite first (needs today's login)")
     ap.add_argument("--swing", action="store_true",
                     help="carry trades overnight (no 15:10 exit) with the live exits and wider variants")
+    ap.add_argument("--late", action="store_true",
+                    help="ways not to buy the top: pullback (limit) entries, an RSI cap, a day-move cap")
     ap.add_argument("--ext", action="store_true",
                     help="skip signals where price is already stretched far from EMA21")
     ap.add_argument("--explore", action="store_true",
@@ -233,6 +262,20 @@ def main() -> None:
             variants += [(f"CARRY only if +{c} at 15:10, trail {x}/{y}", {**h, "trail": (x, y), "carry_min": c})
                          for c in (0, 50, 100)]
         return report(d, variants, swing=True)
+    if args.late:
+        lt = {**live, "trail": (150, 80)}
+        cy = {**live, "hold": True, "carry_min": 0, "trail": (200, 100)}
+        variants = [("LIVE intraday", lt)]
+        variants += [(f"wait for a {p}-pt pullback ({n} candles)", {**lt, "pullback": p, "pb_bars": n})
+                     for p in (20, 30, 40, 60) for n in (3, 6)]
+        variants += [("wait for a pullback to EMA9 (6 candles)", {**lt, "pullback": "ema9", "pb_bars": 6})]
+        variants += [(f"skip if RSI beyond {c}/{100 - c}", {**lt, "rsi_cap": c}) for c in (70, 75, 80)]
+        variants += [(f"skip if day already moved > {x}", {**lt, "max_day_move": x}) for x in (150, 200, 250, 300)]
+        variants += [("CARRY setup", cy)]
+        variants += [(f"CARRY, {p}-pt pullback (6 candles)", {**cy, "pullback": p, "pb_bars": 6}) for p in (30, 40)]
+        variants += [("CARRY, skip if RSI beyond 80/20", {**cy, "rsi_cap": 80})]
+        variants += [("CARRY, skip if day moved > 200", {**cy, "max_day_move": 200})]
+        return report(d, variants)
     if args.ext:
         lt = {**live, "trail": (150, 80)}
         variants = [("LIVE intraday (no limit)", lt)]
