@@ -250,7 +250,9 @@ class OptionTrader:
                          f"  P&L Rs {pnl:+,.0f}", f"{why}. Bought @ {t['entry']:.2f} at {t['time']}"
                          f"{' on ' + t['day'] if self.carry and t.get('day') else ''}.")
         core.append_csv({"date": core.now_ist().strftime("%Y-%m-%d"), "mode": "LIVE" if t["live"] else "PAPER",
-                         "symbol": t["symbol"], "qty": sold, "entry_day": t.get("day", ""), "entry_time": t["time"],
+                         "symbol": t["symbol"], "qty": sold,
+                         **({"entry_day": t.get("day", "")} if self.carry else {}),   # intraday file keeps its columns
+                         "entry_time": t["time"],
                          "exit_time": core.now_ist().strftime("%H:%M"), "entry": round(t["entry"], 2),
                          "exit": round(exit_px, 2), "pnl_rs": round(pnl), "why": why}, self.trades_csv)
         return True
