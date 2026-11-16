@@ -56,7 +56,7 @@ def yahoo_recent(symbol: str = "%5ENSEI") -> pd.DataFrame | None:
 MULTI_CACHE = ft.CACHE.with_name("NIFTY50_5minute_multiyear.csv")
 
 
-def multiyear(years: int, download: bool) -> None:
+def multiyear(years: int, download: bool, book: bool = False) -> None:
     """The live rule and the main filter ideas, year by year. Each calendar year is run on its own
     with prices rescaled so its median close is 25,000 -- the 60-pt stop, 120-pt first hour, 20-pt
     EMA buffer and the trails then mean the same % move in every year. Results are in those
@@ -77,9 +77,14 @@ def multiyear(years: int, download: bool) -> None:
                 ("20-pt pullback entry (6 candles)", {**lt, "pullback": 20, "pb_bars": 6}),
                 ("old exit: close through EMA21, no trail", dict(exit_mode="close")),
                 ("CARRY setup", cy), ("CARRY, skip if RSI beyond 80/20", {**cy, "rsi_cap": 80})]
+    if book:            # booking profit: fixed targets, a stop moved to the entry price, tighter trails
+        variants = [("LIVE intraday", lt)]
+        variants += [(f"book all at +{x}", {**lt, "target": x}) for x in (30, 40, 50, 60, 80, 100)]
+        variants += [(f"stop to entry once +{x}", {**lt, "be": x}) for x in (30, 40, 60)]
+        variants += [(f"trail {x}/{y}", {**live, "trail": (x, y)}) for x, y in ((40, 30), (60, 40), (80, 50))]
     yrs = sorted(set(d.ts.dt.year))
     out = {name: {} for name, _ in variants}
-    info = {}
+    info, alltr = {}, {name: [] for name, _ in variants}
     for yr in yrs:
         start = pd.Timestamp(yr, 1, 1) - pd.Timedelta(days=40)             # warm-up for the indicators
         part = d[(d.ts >= start) & (d.ts < pd.Timestamp(yr + 1, 1, 1))].copy()
@@ -92,6 +97,7 @@ def multiyear(years: int, download: bool) -> None:
         for name, kw in variants:
             t = simulate(part, **kw)
             t = t[pd.to_datetime(t.day).dt.year == yr]
+            alltr[name].append(t)
             out[name][yr] = (len(t), t.pts.sum(), (t.pts > 0).mean() if len(t) else 0)
         print(f"  {yr} done ({info[yr][0]} days, Nifty around {info[yr][1]:,.0f})", flush=True)
     rows = []
@@ -100,13 +106,37 @@ def multiyear(years: int, download: bool) -> None:
         for yr in info:
             n, tot, win = out[name][yr]
             r[str(yr)] = f"{tot:+.0f} ({win:.0%})"
-        r["TOTAL"] = round(sum(v[1] for v in out[name].values()))
-        r["trades"] = sum(v[0] for v in out[name].values())
+        a = pd.concat(alltr[name], ignore_index=True)
+        eq = a.pts.cumsum()
+        r["TOTAL"] = round(a.pts.sum())
+        r["trades"] = len(a)
+        r["win"] = f"{(a.pts > 0).mean():.0%}"
+        r["max_dd"] = round((eq.cummax() - eq).max())
         r["losing_yrs"] = f"{sum(1 for v in out[name].values() if v[1] < 0)}/{len(info)}"
         rows.append(r)
+    if book:            # half the lots book at the target, half follow the live rule
+        base = pd.concat(alltr["LIVE intraday"], ignore_index=True)
+        for x in (40, 60):
+            tg = pd.concat(alltr[f"book all at +{x}"], ignore_index=True)
+            both = pd.concat([base.assign(pts=base.pts / 2), tg.assign(pts=tg.pts / 2)]).sort_values("day", kind="stable")
+            eq = both.pts.cumsum()
+            r = {"version": f"HALF the lots book at +{x}, half run"}
+            for yr in info:
+                r[str(yr)] = f"{(out['LIVE intraday'][yr][1] + out[f'book all at +{x}'][yr][1]) / 2:+.0f}"
+            r.update({"TOTAL": round(both.pts.sum()), "trades": "-", "win": "-", "max_dd": round((eq.cummax() - eq).max()),
+                      "losing_yrs": "-"})
+            rows.append(r)
     pd.set_option("display.width", 250)
     print("\nPoints per year in today-sized Nifty points (win rate in brackets); the first and last year may be partial:")
     print(pd.DataFrame(rows).to_string(index=False))
+    if book:
+        a = pd.concat(alltr["LIVE intraday"], ignore_index=True)
+        lose = a[a.pts < 0]
+        print(f"\nLIVE rule: {len(a)} trades, {len(lose)} ended at a loss. How far were the LOSERS in profit first?")
+        print("  " + ", ".join(f"+{x} or more: {(lose.mfe >= x).mean():.0%}" for x in (20, 30, 40, 50, 60, 80)))
+        win = a[a.pts > 0]
+        print(f"  Winners: average +{win.pts.mean():.0f} pts, the best 10% made +{win.pts.quantile(0.9):.0f} or more "
+              f"and hold {win.pts[win.pts >= win.pts.quantile(0.9)].sum() / a.pts.sum():.0%} of the total profit.")
 
 
 def momentum(entry: str, s: int, last, prev, recent: list) -> bool:
@@ -227,7 +257,7 @@ def simulate(d: pd.DataFrame, exit_mode: str = "close", touch_buf: float = 0.0,
         if r.ts.strftime("%H:%M") >= "15:10" and (
                 not hold or (carry_min is not None and (r.open - pos["entry"]) * s < carry_min)):
             out.append(dict(day=day, side=s, why="15:10", pts=(r.open - pos["entry"]) * s - COST,
-                            nights=(day - pos["day"]).days))
+                            nights=(day - pos["day"]).days, mfe=(pos["best"] - pos["entry"]) * s))
             pos = None
             continue
         # 3) price levels known before this 5-min candle; the first one hit exits
@@ -244,7 +274,7 @@ def simulate(d: pd.DataFrame, exit_mode: str = "close", touch_buf: float = 0.0,
         if (s > 0 and r.low <= lvl) or (s < 0 and r.high >= lvl):
             px = min(r.open, lvl) if s > 0 else max(r.open, lvl)            # a gap fills at the open
             out.append(dict(day=day, side=s, why=why, pts=(px - pos["entry"]) * s - COST,
-                            nights=(day - pos["day"]).days))
+                            nights=(day - pos["day"]).days, mfe=(pos["best"] - pos["entry"]) * s))
             if why == "stop" and px * s <= (pos["entry"] - s * stop_pts) * s + 1e-9:
                 st["stopped"].add(s)
             pos = None
@@ -253,13 +283,13 @@ def simulate(d: pd.DataFrame, exit_mode: str = "close", touch_buf: float = 0.0,
             tgt = pos["entry"] + s * target
             if (s > 0 and r.high >= tgt) or (s < 0 and r.low <= tgt):
                 px = max(r.open, tgt) if s > 0 else min(r.open, tgt)
-                out.append(dict(day=day, side=s, why="target", pts=(px - pos["entry"]) * s - COST))
+                out.append(dict(day=day, side=s, why="target", pts=(px - pos["entry"]) * s - COST, mfe=target))
                 pos = None
                 continue
         pos["best"] = max(pos["best"], r.high) if s > 0 else min(pos["best"], r.low)
         if be and (pos["best"] - pos["entry"]) * s >= be:
             pos["stop"] = max(pos["stop"], pos["entry"]) if s > 0 else min(pos["stop"], pos["entry"])
-    return pd.DataFrame(out, columns=["day", "side", "pts", "why", "nights"]).fillna({"nights": 0})
+    return pd.DataFrame(out, columns=["day", "side", "pts", "why", "nights", "mfe"]).fillna({"nights": 0})
 
 
 def main() -> None:
@@ -276,6 +306,8 @@ def main() -> None:
     ap.add_argument("--multiyear", type=int, nargs="?", const=5, default=0, metavar="YEARS",
                     help="year-by-year check of the live rule and the main filter ideas over YEARS years "
                          "(default 5); downloads the history from Kite the first time (needs today's login)")
+    ap.add_argument("--book", action="store_true",
+                    help="with --multiyear: profit-booking ideas (targets, stop to entry, tight trails, half lots)")
     ap.add_argument("--late", action="store_true",
                     help="ways not to buy the top: pullback (limit) entries, an RSI cap, a day-move cap")
     ap.add_argument("--ext", action="store_true",
@@ -288,7 +320,7 @@ def main() -> None:
                     help="with the live exit, compare re-entry rules after a stop-loss")
     args = ap.parse_args()
     if args.multiyear:
-        return multiyear(args.multiyear, args.download)
+        return multiyear(args.multiyear, args.download, args.book)
     sensex = args.index == "sensex"
     if args.yahoo:
         d = ft.normalize(ft.load_yahoo(args.yahoo))
