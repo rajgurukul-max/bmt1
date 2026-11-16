@@ -20,6 +20,7 @@ Usage on the VPS:  ~/venv/bin/python ribbon_exit_test.py
                    ~/venv/bin/python ribbon_exit_test.py --entry     (MACD vs Fisher Transform entry)
                    ~/venv/bin/python ribbon_exit_test.py --explore   (earlier entry / other exits / 5-min)
                    ~/venv/bin/python ribbon_exit_test.py --swing     (carry overnight, no 15:10 exit)
+Many years (first time needs the morning login):  ... ribbon_exit_test.py --multiyear
 Sensex (first time, after the morning login):  ... ribbon_exit_test.py --index sensex --download --swing
        (later runs: drop --download; add --explore / --entry / --reentry / nothing for other tables)
 """
@@ -50,6 +51,62 @@ def yahoo_recent(symbol: str = "%5ENSEI") -> pd.DataFrame | None:
     except Exception as exc:
         print(f"(Yahoo top-up failed: {exc} -- using the cached data only)")
         return None
+
+
+MULTI_CACHE = ft.CACHE.with_name("NIFTY50_5minute_multiyear.csv")
+
+
+def multiyear(years: int, download: bool) -> None:
+    """The live rule and the main filter ideas, year by year. Each calendar year is run on its own
+    with prices rescaled so its median close is 25,000 -- the 60-pt stop, 120-pt first hour, 20-pt
+    EMA buffer and the trails then mean the same % move in every year. Results are in those
+    'today-sized' Nifty points."""
+    if download or not MULTI_CACHE.exists():
+        ft.download("NSE:NIFTY 50", MULTI_CACHE, days=int(years * 365.25) + 40)
+    d = ft.normalize(pd.read_csv(MULTI_CACHE))
+    y = yahoo_recent()
+    if y is not None:
+        y = ft.normalize(y)
+        d = pd.concat([d, y[y.ts > d.ts.max()]], ignore_index=True)
+    live = dict(exit_mode="touch", touch_buf=20)
+    lt = {**live, "trail": (150, 80)}
+    cy = {**live, "hold": True, "carry_min": 0, "trail": (200, 100)}
+    variants = [("LIVE intraday", lt), ("no EMA50 needed (earlier entry)", {**lt, "stack": "9-21"}),
+                ("skip if RSI beyond 75/25", {**lt, "rsi_cap": 75}), ("skip if day moved > 250", {**lt, "max_day_move": 250}),
+                ("skip if > 100 pts from EMA21", {**lt, "max_ext": 100}),
+                ("20-pt pullback entry (6 candles)", {**lt, "pullback": 20, "pb_bars": 6}),
+                ("old exit: close through EMA21, no trail", dict(exit_mode="close")),
+                ("CARRY setup", cy), ("CARRY, skip if RSI beyond 80/20", {**cy, "rsi_cap": 80})]
+    yrs = sorted(set(d.ts.dt.year))
+    out = {name: {} for name, _ in variants}
+    info = {}
+    for yr in yrs:
+        start = pd.Timestamp(yr, 1, 1) - pd.Timedelta(days=40)             # warm-up for the indicators
+        part = d[(d.ts >= start) & (d.ts < pd.Timestamp(yr + 1, 1, 1))].copy()
+        in_year = part[part.ts.dt.year == yr]
+        if in_year.ts.dt.date.nunique() < 40:
+            continue
+        f = 25000 / in_year.close.median()
+        part[["open", "high", "low", "close"]] *= f
+        info[yr] = (in_year.ts.dt.date.nunique(), in_year.close.median())
+        for name, kw in variants:
+            t = simulate(part, **kw)
+            t = t[pd.to_datetime(t.day).dt.year == yr]
+            out[name][yr] = (len(t), t.pts.sum(), (t.pts > 0).mean() if len(t) else 0)
+        print(f"  {yr} done ({info[yr][0]} days, Nifty around {info[yr][1]:,.0f})", flush=True)
+    rows = []
+    for name, _ in variants:
+        r = {"version": name}
+        for yr in info:
+            n, tot, win = out[name][yr]
+            r[str(yr)] = f"{tot:+.0f} ({win:.0%})"
+        r["TOTAL"] = round(sum(v[1] for v in out[name].values()))
+        r["trades"] = sum(v[0] for v in out[name].values())
+        r["losing_yrs"] = f"{sum(1 for v in out[name].values() if v[1] < 0)}/{len(info)}"
+        rows.append(r)
+    pd.set_option("display.width", 250)
+    print("\nPoints per year in today-sized Nifty points (win rate in brackets); the first and last year may be partial:")
+    print(pd.DataFrame(rows).to_string(index=False))
 
 
 def momentum(entry: str, s: int, last, prev, recent: list) -> bool:
@@ -216,6 +273,9 @@ def main() -> None:
                     help="(re)download the index's year of 5-min candles from Kite first (needs today's login)")
     ap.add_argument("--swing", action="store_true",
                     help="carry trades overnight (no 15:10 exit) with the live exits and wider variants")
+    ap.add_argument("--multiyear", type=int, nargs="?", const=5, default=0, metavar="YEARS",
+                    help="year-by-year check of the live rule and the main filter ideas over YEARS years "
+                         "(default 5); downloads the history from Kite the first time (needs today's login)")
     ap.add_argument("--late", action="store_true",
                     help="ways not to buy the top: pullback (limit) entries, an RSI cap, a day-move cap")
     ap.add_argument("--ext", action="store_true",
@@ -227,6 +287,8 @@ def main() -> None:
     ap.add_argument("--reentry", action="store_true",
                     help="with the live exit, compare re-entry rules after a stop-loss")
     args = ap.parse_args()
+    if args.multiyear:
+        return multiyear(args.multiyear, args.download)
     sensex = args.index == "sensex"
     if args.yahoo:
         d = ft.normalize(ft.load_yahoo(args.yahoo))

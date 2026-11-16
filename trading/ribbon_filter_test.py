@@ -47,7 +47,7 @@ STOP, COST, MAX_SIGNALS = 60.0, 2.0, 2
 FIRST_HOUR_MIN, TREND_DAYS, TREND_NEEDED = 120.0, 5, 4
 
 
-def download(index: str = "NSE:NIFTY 50", cache=None) -> pd.DataFrame:
+def download(index: str = "NSE:NIFTY 50", cache=None, days: int = 380) -> pd.DataFrame:
     """~1 year of 5-minute candles of an index from Kite (read-only), saved to `cache`."""
     cache = cache or CACHE
     from dotenv import load_dotenv
@@ -58,7 +58,7 @@ def download(index: str = "NSE:NIFTY 50", cache=None) -> pd.DataFrame:
     kite = get_kite_client(load_config())
     token = kite.ltp([index])[index]["instrument_token"]     # also fails fast on a stale token
     end = datetime.now()
-    start, rows = end - timedelta(days=380), []
+    start, rows = end - timedelta(days=days), []
     while start < end:
         stop = min(start + timedelta(days=90), end)
         print(f"Fetching {start.date()} -> {stop.date()}")
