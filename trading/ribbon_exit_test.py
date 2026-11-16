@@ -56,7 +56,7 @@ def yahoo_recent(symbol: str = "%5ENSEI") -> pd.DataFrame | None:
 MULTI_CACHE = ft.CACHE.with_name("NIFTY50_5minute_multiyear.csv")
 
 
-def multiyear(years: int, download: bool, book: bool = False) -> None:
+def multiyear(years: int, download: bool, book: bool = False, rally: bool = False) -> None:
     """The live rule and the main filter ideas, year by year. Each calendar year is run on its own
     with prices rescaled so its median close is 25,000 -- the 60-pt stop, 120-pt first hour, 20-pt
     EMA buffer and the trails then mean the same % move in every year. Results are in those
@@ -77,6 +77,15 @@ def multiyear(years: int, download: bool, book: bool = False) -> None:
                 ("20-pt pullback entry (6 candles)", {**lt, "pullback": 20, "pb_bars": 6}),
                 ("old exit: close through EMA21, no trail", dict(exit_mode="close")),
                 ("CARRY setup", cy), ("CARRY, skip if RSI beyond 80/20", {**cy, "rsi_cap": 80})]
+    if rally:           # riding a multi-day rally: slower exits for trades that are carried overnight
+        slow = {"exit_mode": "none", "hold": True, "carry_min": 0, "ema50_buf": 20}
+        variants = [("LIVE intraday", lt), ("CARRY setup (paper now): EMA21 exit, trail 200/100", cy),
+                    ("CARRY, EMA21 exit, no trailing stop", {**live, "hold": True, "carry_min": 0}),
+                    ("CARRY, EMA21 exit, trail 400/200", {**live, "hold": True, "carry_min": 0, "trail": (400, 200)}),
+                    ("CARRY, slow exit: 20 thru EMA50", slow),
+                    ("CARRY, EMA50 exit + trail 400/200", {**slow, "trail": (400, 200)}),
+                    ("CARRY, EMA50 exit + trail 600/300", {**slow, "trail": (600, 300)}),
+                    ("HOLD everything (even losers), EMA50 exit", {"exit_mode": "none", "hold": True, "ema50_buf": 20})]
     if book:            # booking profit: fixed targets, a stop moved to the entry price, tighter trails
         variants = [("LIVE intraday", lt)]
         variants += [(f"book all at +{x}", {**lt, "target": x}) for x in (30, 40, 50, 60, 80, 100)]
@@ -112,6 +121,7 @@ def multiyear(years: int, download: bool, book: bool = False) -> None:
         r["trades"] = len(a)
         r["win"] = f"{(a.pts > 0).mean():.0%}"
         r["max_dd"] = round((eq.cummax() - eq).max())
+        r["best_trade"], r["worst_trade"] = round(a.pts.max()), round(a.pts.min())
         r["losing_yrs"] = f"{sum(1 for v in out[name].values() if v[1] < 0)}/{len(info)}"
         rows.append(r)
     if book:            # half the lots book at the target, half follow the live rule
@@ -306,6 +316,8 @@ def main() -> None:
     ap.add_argument("--multiyear", type=int, nargs="?", const=5, default=0, metavar="YEARS",
                     help="year-by-year check of the live rule and the main filter ideas over YEARS years "
                          "(default 5); downloads the history from Kite the first time (needs today's login)")
+    ap.add_argument("--rally", action="store_true",
+                    help="with --multiyear: slower exits for carried trades, to ride multi-day rallies")
     ap.add_argument("--book", action="store_true",
                     help="with --multiyear: profit-booking ideas (targets, stop to entry, tight trails, half lots)")
     ap.add_argument("--late", action="store_true",
@@ -320,7 +332,7 @@ def main() -> None:
                     help="with the live exit, compare re-entry rules after a stop-loss")
     args = ap.parse_args()
     if args.multiyear:
-        return multiyear(args.multiyear, args.download, args.book)
+        return multiyear(args.multiyear, args.download, args.book, args.rally)
     sensex = args.index == "sensex"
     if args.yahoo:
         d = ft.normalize(ft.load_yahoo(args.yahoo))
