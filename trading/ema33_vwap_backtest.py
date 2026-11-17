@@ -193,9 +193,14 @@ def main() -> None:
     ap.add_argument("--yahoo", help="Yahoo chart JSON only (60 days, quick check)")
     ap.add_argument("--exits", action="store_true", help="the earlier comparison of exits with a fixed 60-pt stop")
     ap.add_argument("--ema", type=int, default=33, help="EMA length of the high/low channel (default 33)")
+    ap.add_argument("--cost", type=float, default=2.0,
+                    help="round-trip cost per FUTURES trade in points (default 2, same as the other tests; "
+                         "real futures cost incl. STT/charges/slippage is nearer 8 at Nifty 25,000)")
     ap.add_argument("--compare-ema", action="store_true",
                     help="compare EMA lengths 13 / 21 / 33 / 50 on the main stop placements at 1:2 and 1:3")
     args = ap.parse_args()
+    global COST
+    COST = args.cost
     if args.yahoo:
         d = ft.normalize(ft.load_yahoo(args.yahoo))
     else:
@@ -218,7 +223,7 @@ def main() -> None:
     days = sum(p[3] for p in parts)
     print(f"{d.ts.dt.date.min()} .. {d.ts.dt.date.max()}, {days} trading days, {len(parts)} calendar year(s); "
           f"points are today-sized (Nifty ~25,000); 1 lot = {LOT}; VWAP = running average (index has no volume); "
-          f"channel = EMA{args.ema} of highs/lows.")
+          f"channel = EMA{args.ema} of highs/lows; FUTURES cost {COST:g} pts per round trip.")
 
     def run(cfg, ema=None, **kw):
         trs = []
