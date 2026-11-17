@@ -1,4 +1,5 @@
-"""Intraday Nifty rule on 10-minute candles: 33-EMA channel break + VWAP + RSI.
+"""Intraday Nifty rule on 10-minute candles: EMA channel break + VWAP + RSI (EMA length 33 by default;
+--ema 21 or --compare-ema to try other lengths).
 
   BULLISH  the 10-min candle CLOSES above the 33-EMA of the HIGHS (it just crossed: the
            previous candle closed at or below it), close above VWAP, RSI(14) >= 55
@@ -32,7 +33,7 @@ Each calendar year is run on its own with prices rescaled so its median close is
 
 Data: the 5-year file written by `ribbon_exit_test.py --multiyear` (else the 1-year file), topped
 up with the latest days from Yahoo. Or --yahoo PATH for a quick 60-day check.
-Usage on the VPS:  ~/venv/bin/python ema33_vwap_backtest.py
+Usage on the VPS:  ~/venv/bin/python ema33_vwap_backtest.py [--compare-ema | --ema 21 | --exits]
 """
 from __future__ import annotations
 
@@ -58,10 +59,16 @@ EXITS = {
 }
 
 
+def set_ema(b: pd.DataFrame, n: int) -> pd.DataFrame:
+    """Copy of the candles with the EMA(n) of the highs / lows as the channel."""
+    b = b.copy()
+    b["ema_hi"] = b.high.ewm(span=n, adjust=False).mean()
+    b["ema_lo"] = b.low.ewm(span=n, adjust=False).mean()
+    return b
+
+
 def prep(d: pd.DataFrame) -> pd.DataFrame:
     b = rb.bars10(d, 10)
-    b["ema_hi"] = b.high.ewm(span=33, adjust=False).mean()
-    b["ema_lo"] = b.low.ewm(span=33, adjust=False).mean()
     tp = (b.high + b.low + b.close) / 3
     b["vwap"] = tp.groupby(b.day).transform(lambda x: x.expanding().mean())
     b["done"] = b.ts + pd.Timedelta(minutes=10)
@@ -185,6 +192,9 @@ def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--yahoo", help="Yahoo chart JSON only (60 days, quick check)")
     ap.add_argument("--exits", action="store_true", help="the earlier comparison of exits with a fixed 60-pt stop")
+    ap.add_argument("--ema", type=int, default=33, help="EMA length of the high/low channel (default 33)")
+    ap.add_argument("--compare-ema", action="store_true",
+                    help="compare EMA lengths 13 / 21 / 33 / 50 on the main stop placements at 1:2 and 1:3")
     args = ap.parse_args()
     if args.yahoo:
         d = ft.normalize(ft.load_yahoo(args.yahoo))
@@ -207,12 +217,13 @@ def main() -> None:
         parts.append((yr, part, prep(part), inyr.ts.dt.date.nunique()))
     days = sum(p[3] for p in parts)
     print(f"{d.ts.dt.date.min()} .. {d.ts.dt.date.max()}, {days} trading days, {len(parts)} calendar year(s); "
-          f"points are today-sized (Nifty ~25,000); 1 lot = {LOT}; VWAP = running average (index has no volume).")
+          f"points are today-sized (Nifty ~25,000); 1 lot = {LOT}; VWAP = running average (index has no volume); "
+          f"channel = EMA{args.ema} of highs/lows.")
 
-    def run(cfg, **kw):
+    def run(cfg, ema=None, **kw):
         trs = []
         for yr, part, b, _ in parts:
-            t = simulate(part, b, cfg, **kw)
+            t = simulate(part, set_ema(b, ema or args.ema), cfg, **kw)
             t = t[pd.to_datetime(t.day).dt.year == yr].copy()
             t["opt"] = option_pts(t, vix) if len(t) else []
             t["yr"] = yr
@@ -237,6 +248,22 @@ def main() -> None:
         pd.set_option("display.max_columns", 30)
         print(pd.DataFrame(rows).to_string(index=False))
 
+    if args.compare_ema:
+        print("\n=== EMA LENGTH comparison (rule as given: VWAP + RSI 55/45), 1:2 and 1:3 ===")
+        rows = []
+        for n in (13, 21, 33, 50):
+            for stop in ("candle", "2candle", "atr1.5", "fixed 60"):
+                for rr in (2, 3):
+                    rows.append((f"EMA{n} {stop} stop, 1:{rr}", run({"stop": stop, "rr": rr}, ema=n)))
+        table(rows)
+        for n in (21, 33):
+            print(f"\n--- EMA{n}, 2candle stop, 1:3: what each condition adds ---")
+            cfg = {"stop": "2candle", "rr": 3}
+            table([("rule as given", run(cfg, ema=n)), ("without VWAP", run(cfg, ema=n, use_vwap=False)),
+                   ("without RSI", run(cfg, ema=n, use_rsi=False)),
+                   ("neither", run(cfg, ema=n, use_vwap=False, use_rsi=False)),
+                   ("bullish only", run(cfg, ema=n, sides=(1,))), ("bearish only", run(cfg, ema=n, sides=(-1,)))])
+        return
     if not args.exits:
         print("\n=== RISK:REWARD 1:2 and 1:3 (avgR = average result per trade in units of its own risk; "
               "break-even needs 33% wins at 1:2, 25% at 1:3) ===")
