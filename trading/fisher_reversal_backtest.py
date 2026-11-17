@@ -50,14 +50,16 @@ def add_fisher(b: pd.DataFrame, n: int) -> pd.DataFrame:
 def reverse_trades(b: pd.DataFrame, intraday: bool, year: int) -> pd.DataFrame:
     """Stop-and-reverse trades inside one calendar year. Gross points per trade (no cost)."""
     rows = b[b.ts.dt.year == year].reset_index(drop=True)
-    flat = set()
-    if intraday:
+    flat_at = {}
+    if intraday:                                  # the last candle that ends by 15:15: flatten there, no signals after it
         ok = rows[(rows.hhmm < "15:10") & (rows.ts + pd.to_timedelta(rows.tf, unit="min")
                                            <= rows.ts.dt.normalize() + pd.Timedelta(hours=15, minutes=15))]
-        flat = set(ok.groupby("day").tail(1).index)
+        flat_at = {r.day: i for i, r in ok.groupby("day").tail(1).iterrows()}
+    flat = set(flat_at.values())
     out, pos, entry, ent_ts = [], 0, 0.0, None
     for i, r in enumerate(rows.itertuples(index=False)):
-        if r.fish_x != 0 and not (intraday and i in flat) and pos != r.fish_x:
+        late = intraday and i >= flat_at.get(r.day, 10 ** 9)
+        if r.fish_x != 0 and not late and pos != r.fish_x:
             if pos:
                 out.append((ent_ts, r.ts, pos, (r.close - entry) * pos))
             pos, entry, ent_ts = int(r.fish_x), r.close, r.ts
